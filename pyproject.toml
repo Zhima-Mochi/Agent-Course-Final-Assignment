@@ -33,6 +33,7 @@ typing-extensions = "^4.13.2"
 whisper = "^1.1.10"
 youtube-transcript-api = "^1.0.3"
 faiss-cpu = {version = "^1.11.0", optional = true}
+yt-dlp = "^2025.4.30"
 
 
 [tool.poetry.group.dev.dependencies]
