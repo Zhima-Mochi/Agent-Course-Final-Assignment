@@ -1,6 +1,6 @@
 from app.domain.task import QuestionTask
 
-def route_tool(task: QuestionTask, parsed_input: str = "") -> str:
+def route_tool(task: QuestionTask) -> str:
     """
     Determines the appropriate tool to handle the task based on file type or question pattern.
     Returns the tool name to be invoked in the LangGraph or execution context.

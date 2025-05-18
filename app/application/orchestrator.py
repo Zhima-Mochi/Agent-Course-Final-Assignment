@@ -1,19 +1,16 @@
 import os
 import pandas as pd
 import logging
-from contextlib import suppress
 from typing import Tuple, Dict, Any, List, Optional
 from langchain_core.messages import HumanMessage
-from dataclasses import dataclass
 
 import gradio as gr
 from app.domain.agent import AIAgent
 from app.domain.task import QuestionTask
-from app.domain.value_objects import Answer
+from app.domain.value_objects import Answer, AgentState
 from app.infrastructure.http_gateway import APIGateway
 from app.infrastructure.tools_module import init_tools
 from app.infrastructure.llm_service import LLMService
-from app.services.media_service import parse_uploaded_media
 from app.infrastructure.tool_router import route_tool
 from app.infrastructure.vector_tools import retrieve_answer, store_to_vectordb
 from app.infrastructure.env_config import initialize_environment
@@ -27,19 +24,20 @@ class TaskProcessor:
     def __init__(self, agent_graph):
         self.agent_graph = agent_graph
     
-    def process_media(self, task: QuestionTask) -> Optional[Any]:
-        """Handle media parsing for the task."""
+    def process_media(self, task: QuestionTask) -> Optional[str]:
+        """Download media file to a temporary location for tools to use."""
         if not task.file_name:
             return None
             
         try:
-            file_path = f"task_files/{task.file_name}"
-            APIGateway.fetch_task_file(task.task_id, file_path)
-            parsed_input = parse_uploaded_media(task.file_name, file_path)
-            logger.debug(f"[Task {task.task_id}] Media parsed")
-            return parsed_input
+            # Fetch the file to the temporary location
+            file_path = APIGateway.fetch_task_file(task.task_id)
+            logger.debug(f"[Task {task.task_id}] Media file downloaded to {file_path}")
+            
+            # Return the file path for tools to use
+            return file_path
         except Exception as e:
-            logger.exception(f"[Task {task.task_id}] ❌ media-parse error: {e}")
+            logger.exception(f"[Task {task.task_id}] ❌ media download error: {e}")
             return None
 
     def check_memory(self, question: str, task_id: str) -> Optional[str]:
@@ -53,17 +51,17 @@ class TaskProcessor:
             logger.warning(f"[Task {task_id}] ❌ memory-lookup error: {e}")
         return None
 
-    def invoke_agent(self, task: QuestionTask, tool_name: str, parsed_input: Optional[Any]) -> str:
+    def invoke_agent(self, task: QuestionTask, tool_name: str, file_path: Optional[str]) -> str:
         """Invoke the agent to get an answer."""
         try:
-            state = {
-                "question": task.question,
-                "file": task.file_name,
-                "parsed_input": parsed_input,
-                "tool_used": tool_name,
-                "llm_output": None,
-                "messages": [HumanMessage(content=task.question)]  # Add question as initial message
-            }
+            state = AgentState(
+                question=task.question,
+                file_name=task.file_name,
+                file_path=file_path,  # Pass the file path instead of parsed content
+                tool_used=tool_name,
+                llm_output=None,
+                messages=[HumanMessage(content=task.question)],  # Add question as initial message
+            )
             state_out = self.agent_graph.invoke(state)
             answer_text = state_out["messages"][-1].content.strip()
             logger.info(f"[Task {task.task_id}] ✅ Agent answer generated")
@@ -77,8 +75,8 @@ class TaskProcessor:
         """Process a single task through the entire pipeline."""
         logger.info(f"[Task {task.task_id}] ▶ {task.question}")
         
-        # 1. Media parsing
-        parsed_input = self.process_media(task)
+        # 1. Media download (if applicable)
+        file_path = self.process_media(task)
         
         # 2. Memory lookup
         if mem_answer := self.check_memory(task.question, task.task_id):
@@ -93,14 +91,14 @@ class TaskProcessor:
         
         # 3. Tool routing
         try:
-            tool_name = route_tool(task, parsed_input)
+            tool_name = route_tool(task)
             logger.info(f"[Task {task.task_id}] 🔧 Tool chosen: {tool_name}")
         except Exception as e:
             logger.exception(f"[Task {task.task_id}] ❌ tool-routing error: {e}")
             tool_name = "llm_tool"  # safe fallback
         
         # 4. Agent invocation
-        answer_text = self.invoke_agent(task, tool_name, parsed_input)
+        answer_text = self.invoke_agent(task, tool_name, file_path)
         
         # # 5. Store to vector DB
         # with suppress(Exception):
@@ -167,8 +165,8 @@ class Orchestrator:
             answers: List[Answer] = []
             results_log: List[Dict[str, Any]] = []
             
-            # Limit to first question for testing
-            questions_data = questions_data[1:2]
+            # =======================================================================================================
+            questions_data = questions_data[4:5]
             
             for item in questions_data:
                 task = QuestionTask(

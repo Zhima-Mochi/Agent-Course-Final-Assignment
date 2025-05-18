@@ -8,8 +8,8 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 from langgraph.graph import END, START, StateGraph
 from langgraph.prebuilt import ToolNode
-from typing_extensions import TypedDict, Annotated
 from langgraph.graph.message import add_messages
+from app.domain.value_objects import AgentState
 
 logger = logging.getLogger(__name__)
 
@@ -21,14 +21,6 @@ SYSTEM_TEMPLATE = (
     "- Otherwise, output the final answer in the format requested."
 )
 MAX_TURNS = 5  # safeguard against infinite loops
-
-
-class AgentState(TypedDict):
-    messages: Annotated[list, add_messages]
-    turn: int
-    pending_tasks: List[str]
-    next: Optional[str]
-    question: Optional[str]
 
 
 @dataclass
@@ -56,27 +48,18 @@ class AIAgent:
         # ---------- retriever ---------- #
         def retriever(state: AgentState) -> AgentState:
             """Initialize the state with the user's question."""
-            logger.info(
-                f"[{self.name}] Enter retriever with state keys: {list(state.keys())}"
-            )
             state.setdefault("messages", [])
             state["messages"].insert(0, sys_msg)
             state["turn"] = 0
-            state.setdefault("pending_tasks", [])
             state["next"] = None
-            logger.info(f"[{self.name}] Retriever initialized messages and turn")
+
             return state
 
         # ---------- planner ---------- #
         def planner(state: AgentState) -> AgentState:
             """Break the question into smaller tasks (if needed)."""
-            logger.info(
-                f"[{self.name}] Enter planner; pending_tasks={state.get('pending_tasks')}"
-            )
+
             state["next"] = "assistant_think"
-            if state.get("pending_tasks"):
-                logger.info(f"[{self.name}] Planner skipping; already have tasks")
-                return state
             # Enhanced planning prompt with bullet requirement
             prompt = [
                 SystemMessage(content="You are a task planner."),
@@ -99,41 +82,38 @@ class AIAgent:
                     for line in re.split(r"[\n]+", raw_plan)
                     if line.strip()
                 ]
-                tasks = []
+                tasks = ["The tasks are: "]
                 for line in lines:
                     # Remove common prefixes
                     task = re.sub(r"^[-•\d\.)\s]+", "", line).strip()
                     if task:
                         tasks.append(task)
-                if not tasks:
-                    tasks = ["Answer the question."]
-                state["messages"].append(AIMessage(content=raw_plan))
-                state["pending_tasks"] = tasks
-                logger.info(f"[{self.name}] Planner generated tasks: {tasks}")
-            except Exception:
-                logger.exception(f"[{self.name}] Error during planning")
-                state["pending_tasks"] = ["Answer the question."]
+                tasks.append("Answer the question.")
+
+                state["messages"].append(HumanMessage(content="\n".join(tasks)))
+                logger.info(f"[{self.name}] Planner tasks: {tasks}")
+            except Exception as e:
+                logger.exception(f"[{self.name}] Error during planning, {e}")
             return state
 
         # ---------- assistant_think ---------- #
         def assistant_think(state: AgentState) -> AgentState:
             """Generate an answer using the tasks or internal reasoning."""
-            logger.info(
-                f"[{self.name}] Enter assistant_think; turn={state.get('turn')}"
-            )
+            logger.info(f"[{self.name}] Assistant think: {state['messages'][-1]}")
             if state["turn"] >= MAX_TURNS:
                 logger.warning(
                     f"[{self.name}] Max turns reached ({state['turn']}); finalizing"
                 )
                 state["next"] = "assistant_finalize"
                 return state
-           
+
             try:
                 result = llm_w_tools.invoke(state["messages"])
-            except Exception:
-                logger.exception(f"[{self.name}] Error invoking LLM with tools")
+                logger.info(f"[{self.name}] Assistant think result: content = {result.content}, tool_calls = {result.tool_calls}")
+            except Exception as e:
+                logger.exception(f"[{self.name}] Error invoking LLM with tools, {e}")
                 state["messages"].append(
-                    AIMessage(content="Error: failed to invoke LLM")
+                    AIMessage(content=f"Error: failed to invoke LLM with tools, {e}")
                 )
                 state["next"] = "assistant_finalize"
                 return state
@@ -145,20 +125,17 @@ class AIAgent:
             state["turn"] += 1
             calls = result.additional_kwargs.get("tool_calls")
             if calls:
-                logger.info(f"[{self.name}] tool calls: {calls}")
                 next_hop = "tools_node"
             elif "#CONTINUE" in result.content.upper():
                 next_hop = "assistant_think"
             else:
                 next_hop = "assistant_finalize"
             state["next"] = next_hop
-            logger.info(f"[{self.name}] assistant_think next hop: {next_hop}")
             return state
 
         # ---------- assistant_finalize ---------- #
         def assistant_finalize(state: AgentState) -> AgentState:
             """Extract the final answer from the generated text."""
-            logger.info(f"[{self.name}] Enter assistant_finalize")
             raw = state["messages"][-1].content.strip() or "❌ No answer generated."
             clean = re.sub(r"```.*?```", "", raw, flags=re.DOTALL)
             clean = re.sub(r"#CONTINUE", "", clean, flags=re.IGNORECASE).strip()
@@ -184,10 +161,9 @@ class AIAgent:
                 except Exception:
                     logger.exception(f"[{self.name}] Error refining answer")
                     final = clean[:500]
-            state["messages"] = [HumanMessage(content=final)]
+            state["messages"].append(AIMessage(content=final))
             state["next"] = END
-            logger.info(f"[{self.name}] FINAL → {final}")
-            logger.info(f"[{self.name}] All messages: {state['messages']}")
+            logger.info(f"[{self.name}] Final answer: {final}")
             return state
 
         # ------------------------------------------------------------------

@@ -12,6 +12,7 @@ import speech_recognition as sr
 from PIL import Image
 import pytesseract
 import logging
+import time
 from app.infrastructure.vector_tools import store_to_vectordb, vector_query
 
 logger = logging.getLogger(__name__)
@@ -20,14 +21,17 @@ logger = logging.getLogger(__name__)
 @tool
 def wiki_search(query: str) -> Dict[str, Any]:
     """Search Wikipedia for a query and return maximum 2 results."""
-    search_docs = WikipediaLoader(query=query, load_max_docs=2).load()
+    try:
+        search_docs = WikipediaLoader(query=query, load_max_docs=2).load()
+    except Exception as e:
+        logger.error(f"Wiki search error: {str(e)}")
+        return {"error": f"Failed to search Wikipedia: {str(e)}"}
     formatted_search_docs = "\n\n---\n\n".join(
         [
             f'<Document source="{doc.metadata["source"]}" page="{doc.metadata.get("page", "")}"/>\n{doc.page_content}\n</Document>'
             for doc in search_docs
         ]
     )
-    logger.info(f"Wiki search result: {formatted_search_docs}")
     return {"wiki_results": formatted_search_docs}
 
 
@@ -37,11 +41,11 @@ def web_search(query: str, num_results: int = 5) -> Dict[str, Any]:
     try:
         with DDGS() as ddgs:
             results = list(ddgs.text(query, max_results=num_results))
-        logger.info(f"Web search result: {results}")
+            time.sleep(1.5)  # throttle
         return {"web_results": results}
     except Exception as e:
         logger.error(f"Web search error: {str(e)}")
-        return {"error": f"Failed to search web: {str(e)}"}
+        return {"error": f"Failed to search web: {str(e)}", "note": "If hit rate limit, do not use this tool."}
 
 
 @tool
@@ -64,7 +68,6 @@ def arxiv_search(query: str, max_results: int = 3) -> Dict[str, Any]:
             )
             formatted_docs.append(formatted_doc)
 
-        logger.info(f"ArXiv search result: {formatted_docs}")
         return {"arxiv_results": "\n\n---\n\n".join(formatted_docs)}
     except Exception as e:
         logger.error(f"arXiv search error: {str(e)}")
@@ -90,7 +93,6 @@ def read_pdf(file_path: str) -> Dict[str, Any]:
             text += f"--- Page {page_num+1} ---\n"
             text += page.get_text()
             text += "\n\n"
-        logger.info(f"PDF content: {text}")
         return {"pdf_content": text}
     except Exception as e:
         logger.error(f"Error reading PDF: {str(e)}")
@@ -125,7 +127,6 @@ def analyze_csv(file_path: str, query: str = "") -> Dict[str, Any]:
             # Include query in the summary for the LLM to use its reasoning
             summary["query"] = query
 
-        logger.info(f"CSV analysis: {summary}")
         return {"csv_analysis": json.dumps(summary, indent=2)}
     except Exception as e:
         logger.error(f"Error analyzing CSV: {str(e)}")
@@ -160,7 +161,6 @@ def analyze_excel(
                     .head(5)
                     .to_dict(orient="records")
                 )
-            logger.info(f"Excel sheets: {sheet_names}, sample data: {all_data}")
             return {"excel_sheets": sheet_names, "sample_data": all_data}
 
         # Basic statistics and info for a single sheet
@@ -175,7 +175,6 @@ def analyze_excel(
         if query:
             summary["query"] = query
 
-        logger.info(f"Excel analysis: {summary}")
         return {"excel_analysis": json.dumps(summary, indent=2)}
     except Exception as e:
         logger.error(f"Error analyzing Excel: {str(e)}")
@@ -220,7 +219,6 @@ def transcribe_audio(file_path: str) -> Dict[str, Any]:
         with sr.AudioFile(wav_path) as source:
             audio_data = recognizer.record(source)
             text = recognizer.recognize_google(audio_data)
-        logger.info(f"Transcription: {text}")
         return {"transcription": text}
     except Exception as e:
         logger.error(f"Error transcribing audio: {str(e)}")
@@ -242,7 +240,6 @@ def ocr_image(file_path: str) -> Dict[str, Any]:
     try:
         image = Image.open(full_path)
         text = pytesseract.image_to_string(image)
-        logger.info(f"OCR text: {text}")
         return {"ocr_text": text}
     except Exception as e:
         logger.error(f"Error performing OCR: {str(e)}")
@@ -263,7 +260,6 @@ def list_files(directory: str = "task_files") -> Dict[str, Any]:
 
     try:
         files = os.listdir(directory)
-        logger.info(f"Files: {files}")
         return {"files": files}
     except Exception as e:
         logger.error(f"Error listing files: {str(e)}")
@@ -283,7 +279,6 @@ def get_youtube_transcript(url: str) -> Dict[str, Any]:
         video_id = re.search(r"(?:v=|be/)([\w-]+)", url).group(1)
         transcript = YouTubeTranscriptApi.get_transcript(video_id)
         text = " ".join([entry["text"] for entry in transcript])
-        logger.info(f"Transcript: {text}")
         return {"transcript": text}
     except Exception as e:
         logger.error(f"Transcript error: {str(e)}")
@@ -312,10 +307,8 @@ def get_youtube_video_frames(url: str) -> Dict[str, Any]:
 
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 ydl.download([url])
-            logger.info(f"Video downloaded to: {video_path}")
             cap = cv2.VideoCapture(video_path)
             fps = cap.get(cv2.CAP_PROP_FPS)
-            logger.info(f"Video FPS: {fps}")
             count = 0
             saved = 0
 
@@ -329,7 +322,6 @@ def get_youtube_video_frames(url: str) -> Dict[str, Any]:
                     saved += 1
                 count += 1
             cap.release()
-            logger.info(f"frame_dir: {frame_dir}, frame_count: {saved}")
             return {"frame_dir": frame_dir, "frame_count": saved}
 
     except Exception as e:
@@ -364,16 +356,14 @@ def transcribe_youtube_audio(url: str) -> Dict[str, Any]:
 
             model = whisper.load_model("base")
             result = model.transcribe(audio_path)
-            logger.info(f"Transcription: {result.get('text', '')}")
             return {"transcription": result.get("text", "")}
     except Exception as e:
         logger.error(f"YouTube audio transcription failed: {str(e)}")
         return {"error": f"Transcription failed: {str(e)}"}
 
-
 tools = [
-    wiki_search,
-    # web_search,
+    # wiki_search,
+    web_search,
     arxiv_search,
     read_pdf,
     analyze_csv,
