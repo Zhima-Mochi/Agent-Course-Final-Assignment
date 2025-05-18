@@ -1,0 +1,294 @@
+from duckduckgo_search import DDGS
+import fitz  # PyMuPDF
+import os
+import pandas as pd
+import json
+import csv
+import subprocess
+from typing import List, Callable, Dict, Any, Optional
+from langchain_core.tools import tool
+from langchain_community.document_loaders import WikipediaLoader, ArxivLoader
+import speech_recognition as sr
+from PIL import Image
+import pytesseract
+import logging
+from app.infrastructure.vector_tools import store_to_vectordb, vector_query
+
+logger = logging.getLogger(__name__)
+
+
+@tool
+def wiki_search(query: str) -> Dict[str, Any]:
+    """Search Wikipedia for a query and return maximum 2 results."""
+    search_docs = WikipediaLoader(query=query, load_max_docs=2).load()
+    formatted_search_docs = "\n\n---\n\n".join(
+        [
+            f'<Document source="{doc.metadata["source"]}" page="{doc.metadata.get("page", "")}"/>\n{doc.page_content}\n</Document>'
+            for doc in search_docs
+        ])
+    return {"wiki_results": formatted_search_docs}
+
+
+@tool
+def web_search(query: str, num_results: int = 5) -> Dict[str, Any]:
+    """Search the web for a query using DuckDuckGo."""
+    try:
+        with DDGS() as ddgs:
+            results = list(ddgs.text(query, max_results=num_results))
+        return {"web_results": results}
+    except Exception as e:
+        logger.error(f"Web search error: {str(e)}")
+        return {"error": f"Failed to search web: {str(e)}"}
+
+
+@tool
+def arxiv_search(query: str, max_results: int = 3) -> Dict[str, Any]:
+    """Search arXiv for academic papers."""
+    try:
+        docs = ArxivLoader(
+            query=query,
+            load_max_docs=max_results,
+            load_all_available_meta=True
+        ).load()
+
+        formatted_docs = []
+        for doc in docs:
+            meta = doc.metadata
+            formatted_doc = (
+                f"Title: {meta.get('Title', 'N/A')}\n"
+                f"Authors: {meta.get('Authors', 'N/A')}\n"
+                f"Published: {meta.get('Published', 'N/A')}\n"
+                f"URL: {meta.get('entry_id', 'N/A')}\n\n"
+                f"Abstract: {doc.page_content[:500]}...\n"
+            )
+            formatted_docs.append(formatted_doc)
+
+        return {"arxiv_results": "\n\n---\n\n".join(formatted_docs)}
+    except Exception as e:
+        logger.error(f"arXiv search error: {str(e)}")
+        return {"error": f"Failed to search arXiv: {str(e)}"}
+
+
+@tool
+def read_pdf(file_path: str) -> Dict[str, Any]:
+    """Extract text from a PDF file."""
+    full_path = os.path.join("task_files", file_path) if not file_path.startswith(
+        "task_files") else file_path
+
+    if not os.path.exists(full_path):
+        return {"error": f"File not found: {full_path}"}
+
+    try:
+        doc = fitz.open(full_path)
+        text = ""
+        for page_num, page in enumerate(doc):
+            text += f"--- Page {page_num+1} ---\n"
+            text += page.get_text()
+            text += "\n\n"
+        return {"pdf_content": text}
+    except Exception as e:
+        logger.error(f"Error reading PDF: {str(e)}")
+        return {"error": f"Failed to read PDF: {str(e)}"}
+
+
+@tool
+def analyze_csv(file_path: str, query: str = "") -> Dict[str, Any]:
+    """Read and analyze a CSV file, optionally answering a specific query about the data."""
+    full_path = os.path.join("task_files", file_path) if not file_path.startswith(
+        "task_files") else file_path
+
+    if not os.path.exists(full_path):
+        return {"error": f"File not found: {full_path}"}
+
+    try:
+        df = pd.read_csv(full_path)
+
+        # Basic statistics and info
+        summary = {
+            "columns": list(df.columns),
+            "shape": df.shape,
+            "dtypes": {col: str(dtype) for col, dtype in df.dtypes.items()},
+            "head": df.head(5).to_dict(orient="records"),
+            "describe": df.describe().to_dict()
+        }
+
+        if query:
+            # Include query in the summary for the LLM to use its reasoning
+            summary["query"] = query
+
+        return {"csv_analysis": json.dumps(summary, indent=2)}
+    except Exception as e:
+        logger.error(f"Error analyzing CSV: {str(e)}")
+        return {"error": f"Failed to analyze CSV: {str(e)}"}
+
+
+@tool
+def analyze_excel(file_path: str, sheet_name: str = None, query: str = "") -> Dict[str, Any]:
+    """Read and analyze an Excel file, optionally from a specific sheet."""
+    full_path = os.path.join("task_files", file_path) if not file_path.startswith(
+        "task_files") else file_path
+
+    if not os.path.exists(full_path):
+        return {"error": f"File not found: {full_path}"}
+
+    try:
+        if sheet_name:
+            df = pd.read_excel(full_path, sheet_name=sheet_name)
+        else:
+            # Read all sheets
+            xls = pd.ExcelFile(full_path)
+            sheet_names = xls.sheet_names
+            all_data = {}
+            for sheet in sheet_names:
+                all_data[sheet] = pd.read_excel(
+                    full_path, sheet_name=sheet).head(5).to_dict(orient="records")
+            return {"excel_sheets": sheet_names, "sample_data": all_data}
+
+        # Basic statistics and info for a single sheet
+        summary = {
+            "columns": list(df.columns),
+            "shape": df.shape,
+            "dtypes": {col: str(dtype) for col, dtype in df.dtypes.items()},
+            "head": df.head(5).to_dict(orient="records"),
+            "describe": df.describe().to_dict()
+        }
+
+        if query:
+            summary["query"] = query
+
+        return {"excel_analysis": json.dumps(summary, indent=2)}
+    except Exception as e:
+        logger.error(f"Error analyzing Excel: {str(e)}")
+        return {"error": f"Failed to analyze Excel: {str(e)}"}
+
+
+@tool
+def transcribe_audio(file_path: str) -> Dict[str, Any]:
+    """Transcribe speech from an audio file."""
+    full_path = os.path.join("task_files", file_path) if not file_path.startswith(
+        "task_files") else file_path
+
+    if not os.path.exists(full_path):
+        return {"error": f"File not found: {full_path}"}
+
+    try:
+        # Ensure wav format for speech_recognition
+        base, ext = os.path.splitext(full_path)
+        wav_path = base + ".wav"
+        # Convert mp3/other to wav via ffmpeg if needed
+        if ext.lower() != ".wav":
+            subprocess.run([
+                "ffmpeg", "-y", "-i", full_path,
+                "-acodec", "pcm_s16le", "-ar", "16000", wav_path
+            ], check=True)
+        else:
+            wav_path = full_path
+        recognizer = sr.Recognizer()
+        with sr.AudioFile(wav_path) as source:
+            audio_data = recognizer.record(source)
+            text = recognizer.recognize_google(audio_data)
+        return {"transcription": text}
+    except Exception as e:
+        logger.error(f"Error transcribing audio: {str(e)}")
+        return {"error": f"Failed to transcribe audio: {str(e)}"}
+
+
+@tool
+def ocr_image(file_path: str) -> Dict[str, Any]:
+    """Extract text from an image using OCR."""
+    full_path = os.path.join("task_files", file_path) if not file_path.startswith(
+        "task_files") else file_path
+
+    if not os.path.exists(full_path):
+        return {"error": f"File not found: {full_path}"}
+
+    try:
+        image = Image.open(full_path)
+        text = pytesseract.image_to_string(image)
+        return {"ocr_text": text}
+    except Exception as e:
+        logger.error(f"Error performing OCR: {str(e)}")
+        return {"error": f"Failed to perform OCR: {str(e)}"}
+
+
+@tool
+def list_files(directory: str = "task_files") -> Dict[str, Any]:
+    """List all files in the specified directory."""
+    directory = os.path.join("task_files", directory) if not directory.startswith(
+        "task_files") else directory
+
+    if not os.path.exists(directory):
+        return {"error": f"Directory not found: {directory}"}
+
+    try:
+        files = os.listdir(directory)
+        return {"files": files}
+    except Exception as e:
+        logger.error(f"Error listing files: {str(e)}")
+        return {"error": f"Failed to list files: {str(e)}"}
+
+# New tools for YouTube transcription
+
+
+@tool
+def get_youtube_transcript(url: str) -> Dict[str, Any]:
+    """Download YouTube transcript (if available)"""
+    import re
+    from youtube_transcript_api import YouTubeTranscriptApi
+    try:
+        video_id = re.search(r"(?:v=|be/)([\w-]+)", url).group(1)
+        transcript = YouTubeTranscriptApi.get_transcript(video_id)
+        text = " ".join([entry["text"] for entry in transcript])
+        return {"transcript": text}
+    except Exception as e:
+        logger.error(f"Transcript error: {str(e)}")
+        return {"error": f"Transcript not available: {str(e)}"}
+
+
+@tool
+def transcribe_youtube_audio(url: str) -> Dict[str, Any]:
+    """Download YouTube audio and transcribe using Whisper"""
+    import tempfile
+    import yt_dlp
+    try:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            audio_path = os.path.join(tmpdir, "audio.m4a")
+            ydl_opts = {
+                'format': 'bestaudio',
+                'outtmpl': audio_path,
+                'quiet': True,
+                'postprocessors': [{
+                    'key': 'FFmpegExtractAudio',
+                    'preferredcodec': 'm4a',
+                    'preferredquality': '192',
+                }],
+            }
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                ydl.download([url])
+            import whisper
+            model = whisper.load_model("base")
+            result = model.transcribe(audio_path)
+            return {"transcription": result.get("text", "")}
+    except Exception as e:
+        logger.error(f"YouTube audio transcription failed: {str(e)}")
+        return {"error": f"Transcription failed: {str(e)}"}
+
+
+tools = [
+    wiki_search,
+    web_search,
+    arxiv_search,
+    read_pdf,
+    analyze_csv,
+    analyze_excel,
+    get_youtube_transcript,
+    transcribe_youtube_audio,
+    transcribe_audio,
+    ocr_image,
+    list_files,
+]
+
+
+def init_tools() -> List[Callable]:
+    """Return a list of all tool functions."""
+    return tools
