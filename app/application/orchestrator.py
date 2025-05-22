@@ -201,7 +201,7 @@ class Orchestrator:
             logger.info(f"Fetched {len(questions_data)} tasks from gateway")
             
             # TODO: Remove this
-            questions_data = questions_data[5:6]
+            questions_data = questions_data[6:7]
             
             processor = TaskProcessor(
                 file_service=self.file_service,

@@ -194,6 +194,7 @@ class AIAgent:
                 try:
                     refined_response = self.llm.invoke(refine_prompt_messages) # invoke with list of messages
                     final = refined_response.content.splitlines()[0].strip(" '\"")
+                    final = final.rstrip(".")
                 except Exception:
                     logger.exception(f"[{self.name}] Error refining answer")
                     final = clean[:500] # Ensure final is not None

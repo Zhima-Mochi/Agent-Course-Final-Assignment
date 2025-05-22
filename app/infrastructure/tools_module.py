@@ -279,17 +279,35 @@ def list_files(directory: str = "task_files") -> Dict[str, Any]:
 
 @tool
 def get_youtube_transcript(url: str) -> Dict[str, Any]:
-    """Download YouTube transcript (if available)"""
-    from youtube_transcript_api import YouTubeTranscriptApi
+    """Download YouTube audio and transcribe using Whisper"""
+    import tempfile
+    import yt_dlp
 
     try:
-        video_id = re.search(r"(?:v=|be/)([\w-]+)", url).group(1)
-        transcript = YouTubeTranscriptApi.get_transcript(video_id)
-        text = " ".join([entry["text"] for entry in transcript])
-        return {"transcript": text}
+        with tempfile.TemporaryDirectory(delete = False) as tmpdir:
+            ydl_opts = {
+                "format": "bestaudio/best",
+                "outtmpl": tmpdir + "/audio",
+                "quiet": True,
+                "postprocessors": [
+                    {
+                        "key": "FFmpegExtractAudio",
+                        "preferredcodec": "mp3",
+                        "preferredquality": "192",
+                    }
+                ],
+            }
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                ydl.download([url])
+            import whisper
+
+            model = whisper.load_model("base")
+            result = model.transcribe(os.path.join(tmpdir, "audio.mp3"))
+            return {"transcription": result.get("text", "")}
     except Exception as e:
-        logger.error(f"Transcript error: {str(e)}")
-        return {"error": f"Transcript not available: {str(e)}"}
+        logger.error(f"YouTube audio transcription failed: {str(e)}")
+        return {"error": f"Transcription failed: {str(e)}"}
+
 
 
 @tool
@@ -334,40 +352,6 @@ def get_youtube_video_frames(url: str) -> Dict[str, Any]:
     except Exception as e:
         logger.error(f"Video frames error: {str(e)}")
         return {"error": f"Failed to extract frames: {str(e)}"}
-
-
-@tool
-def transcribe_youtube_audio(url: str) -> Dict[str, Any]:
-    """Download YouTube audio and transcribe using Whisper"""
-    import tempfile
-    import yt_dlp
-
-    try:
-        with tempfile.TemporaryDirectory(delete = False) as tmpdir:
-            audio_path = os.path.join(tmpdir, "audio.m4a")
-            ydl_opts = {
-                "format": "bestaudio",
-                "outtmpl": audio_path,
-                "quiet": True,
-                "postprocessors": [
-                    {
-                        "key": "FFmpegExtractAudio",
-                        "preferredcodec": "m4a",
-                        "preferredquality": "192",
-                    }
-                ],
-            }
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                ydl.download([url])
-            import whisper
-
-            model = whisper.load_model("base")
-            result = model.transcribe(audio_path)
-            return {"transcription": result.get("text", "")}
-    except Exception as e:
-        logger.error(f"YouTube audio transcription failed: {str(e)}")
-        return {"error": f"Transcription failed: {str(e)}"}
-
 
 @tool
 def execute_code(code: str) -> Dict[str, Any]:
@@ -540,7 +524,6 @@ tools = [
     analyze_excel,
     get_youtube_transcript,
     get_youtube_video_frames,
-    transcribe_youtube_audio,
     transcribe_audio,
     ocr_image,
     execute_code,

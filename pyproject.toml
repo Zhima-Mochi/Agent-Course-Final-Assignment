@@ -30,10 +30,10 @@ supabase = "^2.15.1"
 wikipedia = "^1.4.0"
 arxiv = "^2.2.0"
 typing-extensions = "^4.13.2"
-whisper = "^1.1.10"
 youtube-transcript-api = "^1.0.3"
 faiss-cpu = {version = "^1.11.0", optional = true}
-yt-dlp = "^2025.4.30"
+yt-dlp = "^2025.5.22"
+openai-whisper = {git = "https://github.com/openai/whisper.git"}
 
 
 [tool.poetry.group.dev.dependencies]
