@@ -13,8 +13,6 @@ def route_tool(task: QuestionTask) -> str:
         return "vision_tool"
     if is_excel(task):
         return "excel_tool"
-    if is_vector_memory_hit(task):
-        return "vector_memory_tool"
     return "llm_tool"  # default fallback
 
 

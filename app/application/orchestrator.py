@@ -5,204 +5,251 @@ from typing import Tuple, Dict, Any, List, Optional
 from langchain_core.messages import HumanMessage
 
 import gradio as gr
-from app.domain.agent import AIAgent
 from app.domain.task import QuestionTask
 from app.domain.value_objects import Answer, AgentState
-from app.infrastructure.http_gateway import APIGateway
-from app.infrastructure.tools_module import init_tools
-from app.infrastructure.llm_service import LLMService
-from app.infrastructure.tool_router import route_tool
-from app.infrastructure.vector_tools import retrieve_answer, store_to_vectordb
+from app.application.ports import (
+    FileServicePort,
+    ToolSelectorPort,
+    AgentGraphPort,
+    AgentInitializationPort,
+    TaskGatewayPort,
+    OAuthProfile
+)
 from app.infrastructure.env_config import initialize_environment
+from app.domain.tool import Tool as DomainTool
+from app.infrastructure.tools_module import init_tools as get_langchain_tools
 
 logger = logging.getLogger(__name__)
 initialize_environment()
 
 class TaskProcessor:
-    """Handles the processing of individual tasks including media, memory, and agent invocation."""
+    """Handles the processing of individual tasks using injected services (ports)."""
     
-    def __init__(self, agent_graph):
+    def __init__(self, 
+                 file_service: FileServicePort,
+                 tool_selector: ToolSelectorPort,
+                 agent_graph: AgentGraphPort,
+                 available_tools_descriptions: Optional[List[DomainTool]] = None):
+        self.file_service = file_service
+        self.tool_selector = tool_selector
         self.agent_graph = agent_graph
-    
-    def process_media(self, task: QuestionTask) -> Optional[str]:
-        """Download media file to a temporary location for tools to use."""
+        self.available_tools_descriptions = available_tools_descriptions if available_tools_descriptions else []
+
+    def _process_media(self, task: QuestionTask) -> Optional[str]:
+        """Download media file using FileServicePort."""
         if not task.file_name:
             return None
-            
         try:
-            # Fetch the file to the temporary location
-            file_path = APIGateway.fetch_task_file(task.task_id)
-            logger.debug(f"[Task {task.task_id}] Media file downloaded to {file_path}")
-            
-            # Return the file path for tools to use
+            file_path = self.file_service.download_task_file(task.task_id, task.file_name)
+            if file_path:
+                logger.debug(f"[Task {task.task_id}] Media file downloaded to {file_path}")
+            else:
+                logger.warning(f"[Task {task.task_id}] Media file download failed or no path returned.")
             return file_path
         except Exception as e:
-            logger.exception(f"[Task {task.task_id}] ❌ media download error: {e}")
+            logger.exception(f"[Task {task.task_id}] ❌ media download error via FileService: {e}")
             return None
 
-    def check_memory(self, question: str, task_id: str) -> Optional[str]:
-        """Check if answer exists in memory."""
+    def _invoke_agent(self, task: QuestionTask, selected_tool_name: Optional[str], file_path: Optional[str]) -> str:
+        """Invoke the agent graph to get an answer."""
         try:
-            mem_answer = retrieve_answer(question or "")
-            if mem_answer and not mem_answer.startswith("❌"):
-                logger.info(f"[Task {task_id}] 🧠 Memory hit")
-                return mem_answer
-        except Exception as e:
-            logger.warning(f"[Task {task_id}] ❌ memory-lookup error: {e}")
-        return None
+            initial_messages = [HumanMessage(content=task.question)]
+            if task.file_name and file_path:
+                initial_messages = [HumanMessage(content=f"{task.question}\n\n(Context: File '{task.file_name}' is available at path: {file_path})\n(Hint: Tool '{selected_tool_name if selected_tool_name else 'N/A'}' was suggested for this task.)")]
 
-    def invoke_agent(self, task: QuestionTask, tool_name: str, file_path: Optional[str]) -> str:
-        """Invoke the agent to get an answer."""
-        try:
             state = AgentState(
                 question=task.question,
                 file_name=task.file_name,
-                file_path=file_path,  # Pass the file path instead of parsed content
-                tool_used=tool_name,
+                file_path=file_path,
+                tool_used=selected_tool_name,
                 llm_output=None,
-                messages=[HumanMessage(content=task.question)],  # Add question as initial message
+                messages=initial_messages,
             )
-            state_out = self.agent_graph.invoke(state)
+            
+            state_dict = dict(state)
+
+            logger.debug(f"[Task {task.task_id}] Invoking agent graph with initial state: {state_dict}")
+            state_out = self.agent_graph.invoke(state_dict)
+            
+            if not state_out.get("messages"):
+                logger.error(f"[Task {task.task_id}] Agent output does not contain 'messages'. State: {state_out}")
+                return "ERROR: Agent did not produce messages."
+
             answer_text = state_out["messages"][-1].content.strip()
-            logger.info(f"[Task {task.task_id}] ✅ Agent answer generated")
+            logger.info(f"[Task {task.task_id}] ✅ Agent answer generated: {answer_text[:100]}...")
             return answer_text
         except Exception as e:
-            error_msg = f"ERROR: {e}"
+            error_msg = f"ERROR_AGENT_INVOKE: {e}"
             logger.exception(f"[Task {task.task_id}] ❌ agent-invoke error: {e}")
             return error_msg
 
     def process_task(self, task: QuestionTask) -> Dict[str, Any]:
-        """Process a single task through the entire pipeline."""
+        """Process a single task through the new pipeline using ports."""
         logger.info(f"[Task {task.task_id}] ▶ {task.question}")
         
-        # 1. Media download (if applicable)
-        file_path = self.process_media(task)
+        # Media download (if applicable) via FileServicePort
+        file_path = self._process_media(task)
         
-        # 2. Memory lookup
-        if mem_answer := self.check_memory(task.question, task.task_id):
-            return {
-                "answer": Answer(task_id=task.task_id, content=mem_answer),
-                "result": {
-                    "Task ID": task.task_id, 
-                    "Question": task.question, 
-                    "Submitted Answer": mem_answer
-                }
-            }
-        
-        # 3. Tool routing
+        # Tool routing/selection via ToolSelectorPort
+        selected_tool_domain_object: Optional[Any] = None
+        selected_tool_name_hint: Optional[str] = "llm_tool"
         try:
-            tool_name = route_tool(task)
-            logger.info(f"[Task {task.task_id}] 🔧 Tool chosen: {tool_name}")
+            _selected_domain_tool = self.tool_selector.select_tool(task, self.available_tools_descriptions)
+            if _selected_domain_tool:
+                selected_tool_name_hint = _selected_domain_tool.name
+            else:
+                selected_tool_name_hint = "llm_tool"
+            
+            logger.info(f"[Task {task.task_id}] 🔧 Tool suggested by selector: {selected_tool_name_hint}")
+
         except Exception as e:
-            logger.exception(f"[Task {task.task_id}] ❌ tool-routing error: {e}")
-            tool_name = "llm_tool"  # safe fallback
+            logger.exception(f"[Task {task.task_id}] ❌ tool-routing error via ToolSelector: {e}")
+            selected_tool_name_hint = "llm_tool"
         
-        # 4. Agent invocation
-        answer_text = self.invoke_agent(task, tool_name, file_path)
-        
-        # # 5. Store to vector DB
-        # with suppress(Exception):
-        #     store_to_vectordb(
-        #         texts=[task.question],
-        #         metadatas=[{"answer": answer_text}]
-        #     )
+        # Agent invocation via AgentGraphPort
+        answer_text = self._invoke_agent(task, selected_tool_name_hint, file_path)
         
         return {
             "answer": Answer(task_id=task.task_id, content=answer_text),
             "result": {
                 "Task ID": task.task_id,
                 "Question": task.question,
-                "Submitted Answer": answer_text
+                "Submitted Answer": answer_text,
+                "Source": "Agent"
             }
         }
 
 class Orchestrator:
-    """Orchestrates the entire process of fetching questions, answering them, and submitting responses"""
+    """Orchestrates the process using injected services (ports and adapters)."""
     
-    @staticmethod
-    def _initialize_agent() -> Any:
-        """Initialize the AI agent and its components."""
-        llm = LLMService.create_llm_openai()
-        tools = init_tools()
-        logger.debug("LLM and tools initialized")
-        
-        agent = AIAgent(
-            name="Multimodal AI Agent",
-            llm=llm,
-            tools=tools
-        )
-        
-        return agent.to_langgraph_agent()
+    def __init__(self,
+                 task_gateway: TaskGatewayPort,
+                 agent_initializer_port: AgentInitializationPort,
+                 file_service: FileServicePort,
+                 tool_selector: ToolSelectorPort):
+        self.task_gateway = task_gateway
+        self.file_service = file_service
+        self.tool_selector = tool_selector
+
+        # Initialize Langchain tools and corresponding domain tool descriptions
+        self.langchain_tools: List[Any] = get_langchain_tools()
+        self.domain_tool_descriptions: List[DomainTool] = []
+        for lc_tool in self.langchain_tools:
+            if hasattr(lc_tool, 'name') and hasattr(lc_tool, 'description'):
+                self.domain_tool_descriptions.append(
+                    DomainTool(name=lc_tool.name, description=lc_tool.description)
+                )
+            else:
+                # Handle cases where tools might not have name/description as expected
+                logger.warning(f"Tool object {str(lc_tool)} lacks name or description attribute.")
+
+        self.agent_initializer_port = agent_initializer_port
+
+        self.agent_graph_port = self._initialize_agent_once()
+
+    def _initialize_agent_once(self) -> AgentGraphPort:
+        """Initialize the AI agent graph using the configured AgentInitializationPort."""
+        logger.debug("Initializing agent graph via port...")
+        try:
+            # The agent_initializer_port should already have been configured with necessary tools
+            # (e.g. Langchain tools) and LLM service port during its own instantiation.
+            agent_graph_adapter = self.agent_initializer_port.initialize_agent_graph()
+            logger.info("Agent graph created successfully via port.")
+            return agent_graph_adapter
+        except Exception as e:
+            logger.exception("Failed to initialize agent graph via port.")
+            raise RuntimeError("Agent initialization failed") from e
     
-    @staticmethod
-    def _submit_results(profile: gr.OAuthProfile, answers: List[Answer]) -> Tuple[str, Dict]:
-        """Submit answers and return the result status."""
+    def _submit_results(self, profile: OAuthProfile, answers: List[Answer], space_id: Optional[str]) -> Tuple[str, Dict]:
+        """Submit answers using TaskGatewayPort."""
+        if not answers:
+            logger.warning("No answers to submit")
+            return "No answers were generated to submit.", {
+                "username": profile.username,
+                "score": "N/A",
+                "correct_count": 0,
+                "total_attempted": 0,
+                "message": "No answers generated."
+            }
+
         answers_payload = [ans.to_submission_format() for ans in answers]
-        space_id = os.getenv("SPACE_ID")
         logger.info(f"Submitting {len(answers)} answers for user {profile.username}")
-        return APIGateway.submit_answers(profile.username, answers_payload, space_id)
-    
-    @classmethod
-    def run_all_tasks(cls, profile: gr.OAuthProfile) -> Tuple[str, Optional[pd.DataFrame]]:
-        """Run all tasks and submit answers"""
-        if not profile:
-            logger.warning("User not logged in to Hugging Face")
-            return "Please Login to Hugging Face.", None
         
         try:
+            submission_response = self.task_gateway.submit_answers(profile.username, answers_payload, space_id)
+            return "Submission successful", submission_response
+        except Exception as e:
+            logger.exception(f"Error submitting answers via TaskGatewayPort for user {profile.username}: {e}")
+            return f"Submission failed: {str(e)}", {
+                "error": str(e)
+            }
+
+    def run_all_tasks(self, profile: OAuthProfile, space_id: Optional[str]) -> Tuple[str, Optional[pd.DataFrame]]:
+        """Run all tasks and submit answers using injected services."""
+        if profile and profile.username:
             logger.info(f"Starting task execution for user: {profile.username}")
+        else:
+            profile = OAuthProfile(username="empty_profile")
+            logger.warning("User not logged in or username missing in profile, using test_user")
+
+        try:
+            if not self.agent_graph_port:
+                logger.error("Agent graph not available.")
+                return "Error: Agent graph not initialized.", None
+
+            questions_data = self.task_gateway.fetch_tasks()
+            logger.info(f"Fetched {len(questions_data)} tasks from gateway")
             
-            # Initialize agent
-            agent_graph = cls._initialize_agent()
-            logger.info("Agent graph created successfully")
+            # TODO: Remove this
+            questions_data = questions_data[5:6]
             
-            # Fetch questions
-            questions_data = APIGateway.fetch_questions()
-            logger.info(f"Fetched {len(questions_data)} questions from API")
+            processor = TaskProcessor(
+                file_service=self.file_service,
+                tool_selector=self.tool_selector,
+                agent_graph=self.agent_graph_port,
+                available_tools_descriptions=self.domain_tool_descriptions
+            )
             
-            # Process tasks
-            processor = TaskProcessor(agent_graph)
             answers: List[Answer] = []
             results_log: List[Dict[str, Any]] = []
             
-            # =======================================================================================================
-            questions_data = questions_data[4:5]
-            
             for item in questions_data:
                 task = QuestionTask(
-                    task_id=item.get("task_id"),
+                    task_id=str(item.get("task_id")),
                     question=item.get("question"),
                     file_name=item.get("file_name")
                 )
                 
                 try:
-                    result = processor.process_task(task)
-                    answers.append(result["answer"])
-                    results_log.append(result["result"])
+                    result_info = processor.process_task(task)
+                    answers.append(result_info["answer"])
+                    results_log.append(result_info["result"])
                 except Exception as e:
-                    logger.error(f"Error processing task {task.task_id}: {str(e)}")
+                    logger.error(f"Error processing task {task.task_id}: {str(e)}", exc_info=True)
                     results_log.append({
                         "Task ID": task.task_id,
                         "Question": task.question,
-                        "Submitted Answer": str(e)
+                        "Submitted Answer": f"ERROR_PROCESSING_TASK: {str(e)}",
+                        "Source": "OrchestratorError"
                     })
             
-            # Handle submission results
-            if not answers:
-                logger.warning("No answers to submit")
-                return "No answers submitted.", pd.DataFrame(results_log)
+            submission_status_msg, result_data = self._submit_results(profile, answers, space_id)
             
-            # Submit and format results
-            result_data = cls._submit_results(profile, answers)
-            status = (
-                f"Submission Successful!\nUser: {result_data.get('username')}\n"
-                f"Score: {result_data.get('score', 'N/A')}% ({result_data.get('correct_count', '?')}/"
-                f"{result_data.get('total_attempted', '?')} correct)\n"
-                f"Message: {result_data.get('message', 'No message received.')}"
-            )
-            logger.info(f"Submission complete. Score: {result_data.get('score', 'N/A')}%")
-            return status, pd.DataFrame(results_log)
+            if "error" in result_data or "failed" in submission_status_msg.lower():
+                status_display = f"Submission Problem: {submission_status_msg}\nDetails: {result_data.get('message', str(result_data))}"
+            elif result_data.get('message') == "No answers generated.":
+                status_display = submission_status_msg
+            else:
+                status_display = (
+                    f"Submission Successful!\nUser: {result_data.get('username', profile.username)}\n"
+                    f"Score: {result_data.get('score', 'N/A')}% ({result_data.get('correct_count', '?')}/"
+                    f"{result_data.get('total_attempted', '?')} correct)\n"
+                    f"Message: {result_data.get('message', 'No message received.')}"
+                )
+            
+            logger.info(f"Submission complete for user {profile.username}. Status: {status_display}")
+            return status_display, pd.DataFrame(results_log)
             
         except Exception as e:
-            logger.exception(f"Unexpected error in run_all_tasks: {str(e)}")
+            logger.exception(f"Unexpected error in run_all_tasks for user {profile.username}: {str(e)}")
             return f"Unexpected error: {e}", None

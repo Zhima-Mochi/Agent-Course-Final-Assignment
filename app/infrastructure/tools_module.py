@@ -5,7 +5,7 @@ import pandas as pd
 import json
 import csv
 import subprocess
-from typing import List, Callable, Dict, Any, Optional
+from typing import List, Callable, Dict, Any, Optional, Tuple
 from langchain_core.tools import tool
 from langchain_community.document_loaders import WikipediaLoader, ArxivLoader
 import speech_recognition as sr
@@ -13,7 +13,15 @@ from PIL import Image
 import pytesseract
 import logging
 import time
-from app.infrastructure.vector_tools import store_to_vectordb, vector_query
+import re
+import sys
+import io
+import threading
+import builtins
+import math
+import multiprocessing
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
+from contextlib import redirect_stdout, redirect_stderr
 
 logger = logging.getLogger(__name__)
 
@@ -272,7 +280,6 @@ def list_files(directory: str = "task_files") -> Dict[str, Any]:
 @tool
 def get_youtube_transcript(url: str) -> Dict[str, Any]:
     """Download YouTube transcript (if available)"""
-    import re
     from youtube_transcript_api import YouTubeTranscriptApi
 
     try:
@@ -361,8 +368,171 @@ def transcribe_youtube_audio(url: str) -> Dict[str, Any]:
         logger.error(f"YouTube audio transcription failed: {str(e)}")
         return {"error": f"Transcription failed: {str(e)}"}
 
+
+@tool
+def execute_code(code: str) -> Dict[str, Any]:
+    """
+    Execute Python code provided by the LLM and return the result.
+    
+    Args:
+        code (str): Python code to execute. The code should either:
+            1. Print results using print() statements, which will be captured in stdout, or
+            2. Assign the final result to a variable named 'result', which will be returned
+        
+    Returns:
+        Dict containing stdout, stderr, and optionally a result value if defined in the code
+    """
+    # Create a safe globals dictionary with limited built-ins
+    def get_safe_globals():
+        # Start with an empty globals dictionary
+        safe_globals = {}
+        
+        # Add safe builtins
+        safe_builtins = {
+            'abs': abs,
+            'all': all,
+            'any': any,
+            'bool': bool,
+            'chr': chr,
+            'dict': dict,
+            'dir': dir,
+            'divmod': divmod,
+            'enumerate': enumerate,
+            'filter': filter,
+            'float': float,
+            'format': format,
+            'frozenset': frozenset,
+            'hash': hash,
+            'hex': hex,
+            'int': int,
+            'isinstance': isinstance,
+            'issubclass': issubclass,
+            'len': len,
+            'list': list,
+            'map': map,
+            'max': max,
+            'min': min,
+            'oct': oct,
+            'ord': ord,
+            'pow': pow,
+            'print': print,  # Allow print for stdout capture
+            'range': range,
+            'repr': repr,
+            'reversed': reversed,
+            'round': round,
+            'set': set,
+            'slice': slice,
+            'sorted': sorted,
+            'str': str,
+            'sum': sum,
+            'tuple': tuple,
+            'type': type,
+            'zip': zip,
+        }
+        safe_globals['__builtins__'] = safe_builtins
+        
+        # Add safe modules
+        safe_globals['math'] = math
+        
+        return safe_globals
+    
+    # Function to execute code with timeout
+    def execute_with_timeout(code_str, globals_dict):
+        # Create string buffers for stdout and stderr
+        stdout_buffer = io.StringIO()
+        stderr_buffer = io.StringIO()
+        
+        # Create a local namespace for execution
+        local_namespace = {}
+        
+        # Execute the code with redirected stdout and stderr
+        with redirect_stdout(stdout_buffer), redirect_stderr(stderr_buffer):
+            # Execute the code
+            result = exec(code_str, globals_dict, local_namespace)
+            
+        # Return the results
+        return {
+            "local_namespace": local_namespace,
+            "stdout": stdout_buffer.getvalue(),
+            "stderr": stderr_buffer.getvalue(),
+            "result": result
+        }
+    
+    try:
+        # Set a timeout for code execution (5 seconds)
+        MAX_EXECUTION_TIME = 5  # seconds
+        
+        # Check for potentially dangerous operations
+        dangerous_patterns = [
+            r'\bimport\s+os\b', 
+            r'\bimport\s+sys\b',
+            r'\bimport\s+subprocess\b',
+            r'\bimport\s+shutil\b',
+            r'\bopen\s*\(',
+            r'\b__import__\s*\(',
+            r'\beval\s*\(',
+            r'\bexec\s*\(',
+            r'\bcompile\s*\(',
+            r'\bgetattr\s*\(',
+            r'\bsetattr\s*\(',
+            r'\bdelattr\s*\(',
+            r'\b__\w+__\b',  # Dunder methods/attributes
+        ]
+        
+        for pattern in dangerous_patterns:
+            if re.search(pattern, code):
+                return {"error": f"Security violation: Potentially dangerous operation detected"}
+        
+        # Get safe globals
+        safe_globals = get_safe_globals()
+        
+        # Execute code with timeout using ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(execute_with_timeout, code, safe_globals)
+            try:
+                # Wait for the result with timeout
+                execution_result = future.result(timeout=MAX_EXECUTION_TIME)
+                
+                # Extract results
+                local_namespace = execution_result["local_namespace"]
+                stdout_output = execution_result["stdout"]
+                stderr_output = execution_result["stderr"]
+                
+                # Check if there's a 'result' variable defined in the executed code
+                result_value = None
+                if 'result' in local_namespace:
+                    result_value = local_namespace['result']
+                
+                # Prepare the response
+                response = {
+                    "stdout": stdout_output,
+                    "stderr": stderr_output,
+                }
+                
+                # Add the result value if it exists
+                if result_value is not None:
+                    try:
+                        # Try to convert the result to a JSON-serializable format
+                        json.dumps({"result": result_value})
+                        response["result"] = result_value
+                    except (TypeError, OverflowError):
+                        # If the result can't be JSON serialized, convert it to string
+                        response["result"] = str(result_value)
+                
+                return response
+                
+            except FutureTimeoutError:
+                # Handle timeout
+                logger.error("Code execution timed out")
+                return {"error": f"Code execution timed out after {MAX_EXECUTION_TIME} seconds"}
+    
+    except Exception as e:
+        logger.error(f"Code execution failed: {str(e)}")
+        return {"error": f"Code execution failed: {str(e)}"}
+
+
 tools = [
-    # wiki_search,
+    wiki_search,
     web_search,
     arxiv_search,
     read_pdf,
@@ -373,7 +543,7 @@ tools = [
     transcribe_youtube_audio,
     transcribe_audio,
     ocr_image,
-    list_files,
+    execute_code,
 ]
 
 
