@@ -47,6 +47,7 @@ class BasicPromptStrategy(PromptStrategy):
             "- First, break the question into smaller tasks (if needed).\n"
             "- If the input includes structured data (e.g. tables), always try to parse and reason directly.\n"
             "- Never guess or assume filenames or formats.\n"
+            "- Search the web for information if needed.\n"
             "- If internal reasoning is required, output exactly `#CONTINUE`.\n"
             "- Otherwise, output the final answer in the requested format."
         )

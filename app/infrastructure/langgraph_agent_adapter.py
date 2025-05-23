@@ -71,8 +71,8 @@ class LangGraphAgentInitializerAdapter(AgentInitializationPort):
                 name="StructuredMultimodalAgent", 
                 llm=llm,  # Pass the LLM instance obtained via the port
                 tools=self.lc_tools,
-                prompt_strategy=self.prompt_strategy 
-                # AIAgent still has its own default max_turns=5
+                prompt_strategy=self.prompt_strategy,
+                max_turns=10
             )
             graph = agent.to_langgraph_agent()
             return LangGraphAgentGraphAdapter(graph)

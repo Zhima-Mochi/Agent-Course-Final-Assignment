@@ -2,6 +2,7 @@ from duckduckgo_search import DDGS
 import fitz  # PyMuPDF
 import os
 import pandas as pd
+import math
 import json
 import csv
 import subprocess
@@ -16,10 +17,8 @@ import time
 import re
 import sys
 import io
-import threading
-import builtins
-import math
-import multiprocessing
+import tempfile
+import requests
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from contextlib import redirect_stdout, redirect_stderr
 
@@ -42,18 +41,34 @@ def wiki_search(query: str) -> Dict[str, Any]:
     )
     return {"wiki_results": formatted_search_docs}
 
-
 @tool
 def web_search(query: str, num_results: int = 5) -> Dict[str, Any]:
-    """Search the web for a query using DuckDuckGo."""
+    """Search the web using DuckDuckGo, fallback to SearXNG if it fails."""
     try:
+        from duckduckgo_search import DDGS
         with DDGS() as ddgs:
             results = list(ddgs.text(query, max_results=num_results))
             time.sleep(1.5)  # throttle
         return {"web_results": results}
-    except Exception as e:
-        logger.error(f"Web search error: {str(e)}")
-        return {"error": f"Failed to search web: {str(e)}", "note": "If hit rate limit, do not use this tool."}
+    except Exception as e_ddg:
+        logger.warning(f"DuckDuckGo failed: {str(e_ddg)} — falling back to SearXNG.")
+        try:
+            params = {
+                "q": query,
+                "format": "json",
+                "language": "en",
+                "count": num_results
+            }
+            response = requests.get("https://searx.be/search", params=params)
+            response.raise_for_status()
+            results = response.json().get("results", [])
+            return {"web_results": results}
+        except Exception as e_searx:
+            logger.error(f"SearXNG fallback failed: {str(e_searx)}")
+            return {
+                "error": f"Both DuckDuckGo and SearXNG failed.\nDDG: {e_ddg}\nSearXNG: {e_searx}",
+                "note": "If hit rate limit or connection error, try again later or switch tools."
+            }
 
 
 @tool
@@ -107,86 +122,68 @@ def read_pdf(file_path: str) -> Dict[str, Any]:
         return {"error": f"Failed to read PDF: {str(e)}"}
 
 
-@tool
-def analyze_csv(file_path: str, query: str = "") -> Dict[str, Any]:
-    """Read and analyze a CSV file, optionally answering a specific query about the data."""
-    full_path = (
-        os.path.join("task_files", file_path)
-        if not file_path.startswith("task_files")
-        else file_path
-    )
-
-    if not os.path.exists(full_path):
-        return {"error": f"File not found: {full_path}"}
-
+def download_file(url: str) -> Dict[str, Any]:
+    """Download a file from a URL and save it to a temporary location.
+    
+    Args:
+        url: The URL of the file to download
+        
+    Returns:
+        A dictionary with the local file path, content type, and other metadata or an error message
+    """
     try:
-        df = pd.read_csv(full_path)
-
-        # Basic statistics and info
-        summary = {
-            "columns": list(df.columns),
-            "shape": df.shape,
-            "dtypes": {col: str(dtype) for col, dtype in df.dtypes.items()},
-            "head": df.head(5).to_dict(orient="records"),
-            "describe": df.describe().to_dict(),
+        # Download the file with progress handling for large files
+        response = requests.get(url, stream=True)
+        response.raise_for_status()  # Raise an exception for HTTP errors
+        
+        # Get content type and determine appropriate file extension
+        content_type = response.headers.get('content-type', '').lower()
+        
+        # Determine file extension based on content type
+        extension_map = {
+            'text/csv': '.csv',
+            'application/vnd.ms-excel': '.xls',
+            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': '.xlsx',
+            'application/pdf': '.pdf',
+            'text/html': '.html',
+            'text/plain': '.txt',
+            'application/json': '.json',
+            'image/jpeg': '.jpg',
+            'image/png': '.png'
         }
-
-        if query:
-            # Include query in the summary for the LLM to use its reasoning
-            summary["query"] = query
-
-        return {"csv_analysis": json.dumps(summary, indent=2)}
-    except Exception as e:
-        logger.error(f"Error analyzing CSV: {str(e)}")
-        return {"error": f"Failed to analyze CSV: {str(e)}"}
-
-
-@tool
-def analyze_excel(
-    file_path: str, sheet_name: str = None, query: str = ""
-) -> Dict[str, Any]:
-    """Read and analyze an Excel file, optionally from a specific sheet."""
-    full_path = (
-        os.path.join("task_files", file_path)
-        if not file_path.startswith("task_files")
-        else file_path
-    )
-
-    if not os.path.exists(full_path):
-        return {"error": f"File not found: {full_path}"}
-
-    try:
-        if sheet_name:
-            df = pd.read_excel(full_path, sheet_name=sheet_name)
+        
+        # Try to get extension from URL first, fall back to content-type
+        url_extension = os.path.splitext(url)[1]
+        if url_extension and len(url_extension) < 10:  # Sanity check on extension length
+            file_extension = url_extension
         else:
-            # Read all sheets
-            xls = pd.ExcelFile(full_path)
-            sheet_names = xls.sheet_names
-            all_data = {}
-            for sheet in sheet_names:
-                all_data[sheet] = (
-                    pd.read_excel(full_path, sheet_name=sheet)
-                    .head(5)
-                    .to_dict(orient="records")
-                )
-            return {"excel_sheets": sheet_names, "sample_data": all_data}
-
-        # Basic statistics and info for a single sheet
-        summary = {
-            "columns": list(df.columns),
-            "shape": df.shape,
-            "dtypes": {col: str(dtype) for col, dtype in df.dtypes.items()},
-            "head": df.head(5).to_dict(orient="records"),
-            "describe": df.describe().to_dict(),
+            file_extension = extension_map.get(content_type, '.tmp')
+            
+        # Create a temporary file with the appropriate extension
+        with tempfile.NamedTemporaryFile(delete=False, suffix=file_extension) as tmp_file:
+            temp_path = tmp_file.name
+        
+        total_size = int(response.headers.get('content-length', 0))
+        logger.info(f"Downloading file from {url} ({total_size} bytes), content-type: {content_type}")
+        
+        with open(temp_path, 'wb') as f:
+            for chunk in response.iter_content(chunk_size=8192):
+                if chunk:
+                    f.write(chunk)
+        
+        logger.info(f"File downloaded successfully to {temp_path}")
+        return {
+            "file_path": temp_path,
+            "content_type": content_type,
+            "url": url,
+            "file_extension": file_extension
         }
-
-        if query:
-            summary["query"] = query
-
-        return {"excel_analysis": json.dumps(summary, indent=2)}
+        
     except Exception as e:
-        logger.error(f"Error analyzing Excel: {str(e)}")
-        return {"error": f"Failed to analyze Excel: {str(e)}"}
+        logger.error(f"Error downloading file: {str(e)}")
+        return {"error": f"Failed to download file: {str(e)}"}
+
+
 
 
 @tool
@@ -279,12 +276,25 @@ def list_files(directory: str = "task_files") -> Dict[str, Any]:
 
 @tool
 def get_youtube_transcript(url: str) -> Dict[str, Any]:
-    """Download YouTube audio and transcribe using Whisper"""
+    """Download YouTube audio and transcribe using Whisper
+    
+    This function attempts to transcribe YouTube audio using multiple whisper implementations:
+    1. First tries openai-whisper (original implementation)
+    2. Then tries faster-whisper (alternative implementation with better performance)
+    3. Finally tries transformers pipeline with whisper model
+    
+    Args:
+        url: YouTube URL to download and transcribe
+        
+    Returns:
+        Dictionary with transcription text or error message
+    """
     import tempfile
     import yt_dlp
 
     try:
-        with tempfile.TemporaryDirectory(delete = False) as tmpdir:
+        # Download the YouTube audio
+        with tempfile.TemporaryDirectory(delete=False) as tmpdir:
             ydl_opts = {
                 "format": "bestaudio/best",
                 "outtmpl": tmpdir + "/audio",
@@ -362,9 +372,10 @@ def execute_code(code: str) -> Dict[str, Any]:
         code (str): Python code to execute. The code should either:
             1. Print results using print() statements, which will be captured in stdout, or
             2. Assign the final result to a variable named 'result', which will be returned
+            3. Return a value directly from the function
         
     Returns:
-        Dict containing stdout, stderr, and optionally a result value if defined in the code
+        Dict containing stdout, stderr, and return_value (if any)
     """
     # Create a safe globals dictionary with limited built-ins
     def get_safe_globals():
@@ -491,6 +502,7 @@ def execute_code(code: str) -> Dict[str, Any]:
                 response = {
                     "stdout": stdout_output,
                     "stderr": stderr_output,
+                    "return_value": execution_result,
                 }
                 
                 # Add the result value if it exists
@@ -515,13 +527,249 @@ def execute_code(code: str) -> Dict[str, Any]:
         return {"error": f"Code execution failed: {str(e)}"}
 
 
+def resolve_path(file_path: str) -> Tuple[str, str, str]:
+    """Resolve a file path to a full path, extracting extension and content type.
+    
+    Args:
+        file_path: Local path or URL to resolve
+        
+    Returns:
+        Tuple of (full_path, file_extension, content_type)
+        
+    Raises:
+        ValueError: If the file cannot be downloaded or found
+    """
+    if file_path.startswith("http"):
+        result = download_file(file_path)
+        if "error" in result:
+            raise ValueError(result["error"])
+        return result["file_path"], result.get("file_extension", "").lower(), result.get("content_type", "").lower()
+    
+    full_path = os.path.join("task_files", file_path) if not file_path.startswith("task_files") else file_path
+    if not os.path.exists(full_path):
+        raise FileNotFoundError(f"File not found: {full_path}")
+    
+    return full_path, os.path.splitext(full_path)[1].lower(), ""
+
+
+def detect_file_type(extension: str, content_type: str) -> str:
+    """Detect file type based on extension and content type.
+    
+    Args:
+        extension: File extension including the dot (e.g., '.pdf')
+        content_type: MIME type from HTTP headers
+        
+    Returns:
+        Detected file type as string
+    """
+    if extension in [".pdf"] or "application/pdf" in content_type:
+        return "pdf"
+    elif extension in [".xlsx", ".xls", ".xlsm"] or "excel" in content_type or "spreadsheet" in content_type:
+        return "excel"
+    elif extension in [".csv", ".tsv"] or "csv" in content_type or "text/plain" in content_type:
+        return "csv"
+    elif extension in [".txt", ".md", ".json", ".xml", ".html", ".htm"] or "text/" in content_type:
+        return "text"
+    return "unknown"
+
+
+def process_pdf(path: str) -> Dict[str, Any]:
+    """Process a PDF file and extract its text content.
+    
+    Args:
+        path: Path to the PDF file
+        
+    Returns:
+        Dictionary with file content and metadata
+    """
+    try:
+        doc = fitz.open(path)
+        text = "\n\n".join(f"--- Page {i+1} ---\n{page.get_text()}" for i, page in enumerate(doc))
+        return {"file_content": text, "file_type": "pdf", "file_path": path}
+    except Exception as e:
+        logger.error(f"Error reading PDF: {str(e)}")
+        return {"error": f"Failed to read PDF: {str(e)}"}
+
+
+def summarize_tabular(df: pd.DataFrame, file_type: str, path: str, query: str = "") -> Dict[str, Any]:
+    """Create a summary of a tabular dataframe.
+    
+    Args:
+        df: Pandas DataFrame to summarize
+        file_type: Type of file (csv, excel_sheet)
+        path: Path to the source file
+        query: Optional query about the data
+        
+    Returns:
+        Dictionary with summary information
+    """
+    summary = {
+        "columns": list(df.columns),
+        "shape": df.shape,
+        "dtypes": {col: str(dtype) for col, dtype in df.dtypes.items()},
+        "head": df.head(5).to_dict(orient="records"),
+        "describe": df.describe().to_dict(),
+    }
+    if query:
+        summary["query"] = query
+    return {"file_content": json.dumps(summary, indent=2), "file_type": file_type, "file_path": path}
+
+
+def process_excel(path: str, sheet_name: str = None, query: str = "") -> Dict[str, Any]:
+    """Process an Excel file, optionally focusing on a specific sheet.
+    
+    Args:
+        path: Path to the Excel file
+        sheet_name: Optional name of sheet to analyze
+        query: Optional query about the data
+        
+    Returns:
+        Dictionary with file content and metadata
+    """
+    try:
+        if sheet_name:
+            df = pd.read_excel(path, sheet_name=sheet_name)
+            return summarize_tabular(df, "excel_sheet", path, query)
+        
+        # Read all sheets
+        xls = pd.ExcelFile(path)
+        sheet_names = xls.sheet_names
+        all_data = {}
+        for sheet in sheet_names:
+            all_data[sheet] = pd.read_excel(path, sheet_name=sheet).head(5).to_dict(orient="records")
+        
+        return {"file_content": all_data, "sheet_names": sheet_names, "file_type": "excel_workbook", "file_path": path}
+    except Exception as e:
+        logger.error(f"Error reading Excel: {str(e)}")
+        return {"error": f"Failed to read Excel: {str(e)}"}
+
+
+def process_csv(path: str, query: str = "") -> Dict[str, Any]:
+    """Process a CSV file with smart delimiter detection.
+    
+    Args:
+        path: Path to the CSV file
+        query: Optional query about the data
+        
+    Returns:
+        Dictionary with file content and metadata
+    """
+    try:
+        # Try standard CSV parsing first
+        try:
+            df = pd.read_csv(path)
+        except Exception:
+            # Try with different delimiter detection
+            with open(path, 'r', encoding='utf-8', errors='replace') as f:
+                sample = f.read(4096)
+            
+            # Count potential delimiters
+            delimiters = {',': 0, '\t': 0, ';': 0, '|': 0}
+            for d in delimiters:
+                delimiters[d] = sample.count(d)
+            
+            # Use the most common delimiter
+            best_delimiter = max(delimiters.items(), key=lambda x: x[1])[0]
+            if best_delimiter != ',' and delimiters[best_delimiter] > 0:
+                logger.info(f"Using delimiter: '{best_delimiter}'")
+                df = pd.read_csv(path, sep=best_delimiter)
+            else:
+                # If still failing, try to read as Excel
+                logger.info("Trying to read as Excel file")
+                df = pd.read_excel(path)
+        
+        return summarize_tabular(df, "csv", path, query)
+    except Exception as e:
+        logger.error(f"Error reading CSV: {str(e)}")
+        return {"error": f"Failed to read CSV: {str(e)}"}
+
+
+def process_text_file(path: str) -> Dict[str, Any]:
+    """Process a text file.
+    
+    Args:
+        path: Path to the text file
+        
+    Returns:
+        Dictionary with file content and metadata
+    """
+    try:
+        with open(path, 'r', encoding='utf-8', errors='replace') as f:
+            content = f.read()
+        return {"file_content": content, "file_type": "text", "file_path": path}
+    except Exception as e:
+        logger.error(f"Error reading text file: {str(e)}")
+        return process_binary_file(path)
+
+
+def process_binary_file(path: str) -> Dict[str, Any]:
+    """Process a binary file by returning metadata.
+    
+    Args:
+        path: Path to the binary file
+        
+    Returns:
+        Dictionary with file info and metadata
+    """
+    try:
+        file_size = os.path.getsize(path)
+        return {
+            "file_info": f"Binary file: {os.path.basename(path)}, Size: {file_size} bytes", 
+            "file_type": "binary",
+            "file_path": path
+        }
+    except Exception as e:
+        logger.error(f"Error processing binary file: {str(e)}")
+        return {"error": f"Failed to read file: {str(e)}"}
+
+
+@tool
+def read_file(file_path: str, query: str = "", sheet_name: str = None) -> Dict[str, Any]:
+    """Read and analyze a file of various formats (PDF, CSV, Excel, etc.).
+    Automatically detects the file type and processes it accordingly.
+    
+    Args:
+        file_path: Path to the file (local path or URL)
+        query: Optional query about the data (for tabular data analysis)
+        sheet_name: Optional sheet name (for Excel files)
+        
+    Returns:
+        Dictionary with file content or analysis results and file path
+    """
+    try:
+        # Resolve path and detect file type
+        full_path, file_extension, content_type = resolve_path(file_path)
+        file_type = detect_file_type(file_extension, content_type)
+        
+        logger.info(f"Detected file type: {file_type} for {file_path}")
+        
+        # Map file types to their processors
+        processors = {
+            "pdf": process_pdf,
+            "excel": lambda p: process_excel(p, sheet_name, query),
+            "csv": lambda p: process_csv(p, query),
+            "text": process_text_file,
+            "unknown": process_text_file  # Try text first for unknown types
+        }
+        
+        # Process the file with the appropriate processor
+        processor = processors.get(file_type, process_text_file)
+        return processor(full_path)
+        
+    except FileNotFoundError as e:
+        return {"error": str(e)}
+    except ValueError as e:
+        return {"error": str(e)}
+    except Exception as e:
+        logger.error(f"Error processing file: {str(e)}")
+        return {"error": f"Failed to process file: {str(e)}"}
+
+
 tools = [
     wiki_search,
     web_search,
     arxiv_search,
-    read_pdf,
-    analyze_csv,
-    analyze_excel,
+    read_file,  # Unified file reading tool
     get_youtube_transcript,
     get_youtube_video_frames,
     transcribe_audio,

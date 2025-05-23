@@ -8,24 +8,31 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 from langgraph.graph import END, START, StateGraph
 from langgraph.prebuilt import ToolNode
+
 # from langgraph.graph.message import add_messages # This import seems unused
-from app.domain.value_objects import AgentState # Still depends on this domain value object
-from app.domain.prompt_strategy import PromptStrategy, BasicPromptStrategy # Import PromptStrategy
+from app.domain.value_objects import (
+    AgentState,
+)  # Still depends on this domain value object
+from app.domain.prompt_strategy import (
+    PromptStrategy,
+    BasicPromptStrategy,
+)  # Import PromptStrategy
 
 logger = logging.getLogger(__name__)
 
 # SYSTEM_TEMPLATE will now come from PromptStrategy
 # MAX_TURNS = 5
 
+
 @dataclass
 class AIAgent:
     """LangGraph agent with a *planner* stage and explicit continue logic."""
 
     name: str
-    llm: ChatOpenAI # Still directly ChatOpenAI, not LLMServicePort. Handled by adapter for now.
+    llm: ChatOpenAI  # Still directly ChatOpenAI, not LLMServicePort. Handled by adapter for now.
     tools: List[Any]  # List of tools that can be used by the agent
-    prompt_strategy: PromptStrategy # Added prompt_strategy
-    max_turns: int = 5 # Made max_turns a configurable parameter
+    prompt_strategy: PromptStrategy  # Added prompt_strategy
+    max_turns: int = 5  # Made max_turns a configurable parameter
 
     def to_langgraph_agent(self) -> Any:
         """
@@ -39,25 +46,31 @@ class AIAgent:
         """
 
         llm_w_tools = self.llm.bind_tools(self.tools, parallel_tool_calls=True)
-        
+
         # Get system message from prompt strategy
         # Assuming generate_prompt can return a simple string for system message if no history/query needed for it
         # or we add a specific method to PromptStrategy for system prompts.
         # For now, let's assume generate_prompt is flexible or we use a dedicated method if defined.
         # BasicPromptStrategy.generate_prompt expects history and query. This is not ideal for system message.
         # Let's add a dedicated method to PromptStrategy for the main system prompt.
-        if hasattr(self.prompt_strategy, 'get_system_prompt'):
+        if hasattr(self.prompt_strategy, "get_system_prompt"):
             system_prompt_content = self.prompt_strategy.get_system_prompt()
         elif isinstance(self.prompt_strategy, BasicPromptStrategy):
             # Fallback for BasicPromptStrategy if get_system_prompt is not yet added
             # This is a placeholder, ideally BasicPromptStrategy would also have get_system_prompt
-            system_prompt_content = "You are a helpful AI assistant. Please respond to the user's request."
-            logger.warning("PromptStrategy does not have get_system_prompt, using default for AIAgent system message.")
+            system_prompt_content = (
+                "You are a helpful AI assistant. Please respond to the user's request."
+            )
+            logger.warning(
+                "PromptStrategy does not have get_system_prompt, using default for AIAgent system message."
+            )
         else:
             # Generic fallback or raise error
             system_prompt_content = "You are an AI assistant."
-            logger.warning("PromptStrategy lacks get_system_prompt and is not BasicPromptStrategy, using generic system message.")
-            
+            logger.warning(
+                "PromptStrategy lacks get_system_prompt and is not BasicPromptStrategy, using generic system message."
+            )
+
         sys_msg = SystemMessage(content=system_prompt_content)
 
         # ---------- retriever ---------- #
@@ -67,9 +80,9 @@ class AIAgent:
             # Ensure sys_msg is always first, even if messages already exist (e.g. from a previous turn in a longer conversation)
             # However, AgentState messages are typically re-initialized per invoke for this agent.
             if not state["messages"] or state["messages"][0].content != sys_msg.content:
-                 state["messages"].insert(0, sys_msg)
+                state["messages"].insert(0, sys_msg)
             state["turn"] = 0
-            state["next"] = None # Ensure 'next' is initialized
+            state["next"] = None  # Ensure 'next' is initialized
 
             return state
 
@@ -78,7 +91,7 @@ class AIAgent:
             """Break the question into smaller tasks (if needed)."""
 
             state["next"] = "assistant_think"
-            
+
             # Example of using PromptStrategy for planner - IF PromptStrategy supports it
             # For now, keeping original planner prompt. This would be a further refactoring.
             planner_prompt_messages = [
@@ -123,53 +136,71 @@ class AIAgent:
 
         # ---------- assistant_think ---------- #
         def assistant_think(state: AgentState) -> AgentState:
-            """Generate an answer using the tasks or internal reasoning."""
-            logger.info(f"[{self.name}] Assistant think: current question/task: {state['messages'][-1].content if state['messages'] else 'No messages'}")
-            if state.get("turn", 0) >= self.max_turns: # Use self.max_turns
+            """Generate an answer using the tasks or internal reasoning (CoT enabled if set)."""
+            logger.info(f"Previous last  message: {state.get('messages', ["No messages"])[-1]}")
+            logger.info(f"[{self.name}] Assistant thinking...")
+
+            if state.get("turn", 0) >= self.max_turns:  # Use self.max_turns
                 logger.warning(
                     f"[{self.name}] Max turns reached ({state.get('turn',0)}); finalizing"
                 )
                 state["next"] = "assistant_finalize"
                 return state
 
+            # Get current messages from state
+            messages = state.get("messages", [])
+
+ 
+            if state.get("turn", 0) == 0:
+                messages.append(
+                    HumanMessage(
+                        content="To solve this correctly, reason through the steps carefully before answering. Let's break it down step by step."
+                    )
+                )
+
             try:
-                # Ensure messages are passed correctly. state["messages"] should be List[BaseMessage]
-                result = llm_w_tools.invoke(state["messages"])
-                logger.info(f"[{self.name}] Assistant think result: content = {result.content}, tool_calls = {result.tool_calls}")
+                # Ensure messages are passed correctly. messages should be List[BaseMessage]
+                result = llm_w_tools.invoke(messages)
+                logger.info(f"[{self.name}] Assistant response: {result.content or 'use tool calls'}")
             except Exception as e:
-                logger.exception(f"[{self.name}] Error invoking LLM with tools, {e}")
-                current_messages = state.get("messages", [])
-                current_messages.append(
+                logger.exception(f"[{self.name}] LLM invocation failed: {e}")
+                messages.append(
                     AIMessage(content=f"Error: failed to invoke LLM with tools, {e}")
                 )
-                state["messages"] = current_messages
+                state["messages"] = messages
                 state["next"] = "assistant_finalize"
                 return state
-            
-            current_messages = state.get("messages", [])
-            current_messages.append(
+
+            # Update message history with response
+            messages.append(
                 AIMessage(
-                    content=result.content, additional_kwargs=result.additional_kwargs, tool_calls=result.tool_calls or []
+                    content=result.content,
+                    additional_kwargs=result.additional_kwargs,
+                    tool_calls=result.tool_calls or [],
                 )
             )
-            state["messages"] = current_messages
-            state["turn"] = state.get("turn",0) + 1 # use .get for safety and increment
-            
-            # Check for tool_calls from AIMessage object
-            calls = result.tool_calls 
-            if calls:
-                next_hop = "tools_node"
+            state["messages"] = messages
+            state["turn"] = (
+                state.get("turn", 0) + 1
+            )  # use .get for safety and increment
+
+            # Routing logic with additional safeguards
+            if result.tool_calls:
+                state["next"] = "tools_node"
             elif "#CONTINUE" in result.content.upper():
-                next_hop = "assistant_think"
+                state["next"] = "assistant_think"
             else:
-                next_hop = "assistant_finalize"
-            state["next"] = next_hop
+                state["next"] = "assistant_finalize"
             return state
 
         # ---------- assistant_finalize ---------- #
         def assistant_finalize(state: AgentState) -> AgentState:
             """Extract the final answer from the generated text."""
-            raw = state["messages"][-1].content.strip() if state["messages"] else "❌ No answer generated."
+            raw = (
+                state["messages"][-1].content.strip()
+                if state["messages"]
+                else "❌ No answer generated."
+            )
             clean = re.sub(r"```.*?```", "", raw, flags=re.DOTALL)
             clean = re.sub(r"#CONTINUE", "", clean, flags=re.IGNORECASE).strip()
             final = None
@@ -177,11 +208,13 @@ class AIAgent:
             if m := re.fullmatch(r".*?(-?\d+(?:\.\d+)?)\D*$", clean):
                 final = m.group(1)
             # Multiple-choice match
-            elif m := re.fullmatch(r".*?\b([A-D](?:,[A-D])*)\b.*", clean): # Added \b to ensure whole word match for A-D
+            elif m := re.fullmatch(
+                r".*?\b([A-D](?:,[A-D])*)\b.*", clean
+            ):  # Added \b to ensure whole word match for A-D
                 final = m.group(1)
             else:
                 # Fallback extraction
-                refine_prompt_messages = [ # Changed to list of messages
+                refine_prompt_messages = [  # Changed to list of messages
                     SystemMessage(content="You are an answer extraction assistant."),
                     HumanMessage(
                         content=(
@@ -189,18 +222,28 @@ class AIAgent:
                             "Extract ONLY the final answer from the text below. No explanations or conversational pleasantries.\n---\n"
                             f"{clean}\n---"
                         )
-                    )
+                    ),
                 ]
                 try:
-                    refined_response = self.llm.invoke(refine_prompt_messages) # invoke with list of messages
+                    refined_response = self.llm.invoke(
+                        refine_prompt_messages
+                    )  # invoke with list of messages
                     final = refined_response.content.splitlines()[0].strip(" '\"")
                     final = final.rstrip(".")
                 except Exception:
                     logger.exception(f"[{self.name}] Error refining answer")
-                    final = clean[:500] # Ensure final is not None
-            
+                    final = clean[:500]  # Ensure final is not None
+
             current_messages = state.get("messages", [])
-            current_messages.append(AIMessage(content=final if final is not None else "Could not extract final answer."))
+            current_messages.append(
+                AIMessage(
+                    content=(
+                        final
+                        if final is not None
+                        else "Could not extract final answer."
+                    )
+                )
+            )
             state["messages"] = current_messages
             state["next"] = END
             logger.info(f"[{self.name}] Final answer: {final}")
@@ -209,7 +252,9 @@ class AIAgent:
         # ------------------------------------------------------------------
         # build graph
         # ------------------------------------------------------------------
-        g = StateGraph(AgentState) # AgentState should be a TypedDict or Pydantic model for LangGraph
+        g = StateGraph(
+            AgentState
+        )  # AgentState should be a TypedDict or Pydantic model for LangGraph
         g.add_node("retriever", retriever)
         g.add_node("planner", planner)
         g.add_node("assistant_think", assistant_think)
@@ -220,15 +265,15 @@ class AIAgent:
         g.add_edge("retriever", "planner")
         g.add_conditional_edges(
             "planner",
-            lambda s: s.get("next", "assistant_think"), # Use .get for safety
+            lambda s: s.get("next", "assistant_think"),  # Use .get for safety
             {
                 "assistant_think": "assistant_think",
-                "assistant_finalize": "assistant_finalize", # Should planner directly go to finalize? Unlikely.
+                "assistant_finalize": "assistant_finalize",  # Should planner directly go to finalize? Unlikely.
             },
         )
         g.add_conditional_edges(
             "assistant_think",
-            lambda s: s["next"], # 'next' should always be set by assistant_think
+            lambda s: s["next"],  # 'next' should always be set by assistant_think
             {
                 "tools_node": "tools_node",
                 "assistant_think": "assistant_think",
@@ -247,5 +292,5 @@ class AIAgent:
         #     logger.info("Agent graph diagram saved to graph.png")
         # except Exception as e:
         #     logger.warning(f"Could not draw agent graph: {e}. Ensure graphviz and dependencies are installed.")
-            
-        return graph 
+
+        return graph
