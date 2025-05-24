@@ -1,3 +1,16 @@
+---
+title: Agent-Course-Final-Assignment
+emoji: 🧑‍🔬🤖
+colorFrom: indigo
+colorTo: indigo
+sdk: gradio
+sdk_version: 5.25.2
+app_file: app.py
+pinned: false
+hf_oauth: true
+hf_oauth_expiration_minutes: 480
+---
+
 # Agent-Course-Final-Assignment 🧑‍🔬🤖
 
 A **Gradio-powered AI-Agent demo** that showcases how to orchestrate multiple LLM tools (search, audio-to-text, code-execution, data-viz, etc.) with **LangGraph / LangChain** into a single, login-protected workflow.  
