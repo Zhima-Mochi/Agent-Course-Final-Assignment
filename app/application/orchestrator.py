@@ -5,6 +5,7 @@ from typing import Tuple, Dict, Any, List, Optional
 from langchain_core.messages import HumanMessage
 
 import gradio as gr
+from gradio.oauth import OAuthProfile
 from app.domain.task import QuestionTask
 from app.domain.value_objects import Answer, AgentState
 from app.application.ports import (
@@ -12,8 +13,7 @@ from app.application.ports import (
     ToolSelectorPort,
     AgentGraphPort,
     AgentInitializationPort,
-    TaskGatewayPort,
-    OAuthProfile
+    TaskGatewayPort
 )
 from app.infrastructure.env_config import initialize_environment
 from app.domain.tool import Tool as DomainTool

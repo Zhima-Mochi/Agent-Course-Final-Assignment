@@ -213,6 +213,7 @@ class AIAgent:
                     content=(
                         f"Question: {state.get('question', '')}\n"
                         "Extract ONLY the final answer from the text below. No explanations or conversational pleasantries.\n---\n"
+                        "If the answer is for numeric value, extract it as a number. If it's a list, extract it as a list. If it's a string, extract it as a string.\n"
                         f"{clean}\n---"
                     )
                 ),

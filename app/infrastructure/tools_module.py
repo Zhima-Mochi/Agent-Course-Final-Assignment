@@ -1,6 +1,8 @@
 import fitz  # PyMuPDF
 import os
 import random
+from matplotlib import pyplot as plt
+import numpy as np
 import pandas as pd
 import math
 import json
@@ -659,21 +661,20 @@ def get_youtube_video_frames(url: str) -> Dict[str, Any]:
                 ydl.download([url])
             cap = cv2.VideoCapture(video_path)
             fps = cap.get(cv2.CAP_PROP_FPS)
-            count = 0
-            saved = 0
+            frame_names = []
 
             while cap.isOpened():
                 ret, frame = cap.read()
                 if not ret:
                     break
                 if int(cap.get(cv2.CAP_PROP_POS_FRAMES)) % int(fps) == 0:
+                    frame_name = f"frame_{len(frame_names):04d}.jpg"
                     frame_path = os.path.join(
-                        frame_dir, f"frame_{saved:04d}.jpg")
+                        frame_dir, frame_name)
                     cv2.imwrite(frame_path, frame)
-                    saved += 1
-                count += 1
+                    frame_names.append(frame_name)
             cap.release()
-            return {"frame_dir": frame_dir, "frame_count": saved}
+            return {"frame_dir": frame_dir, "frame_names": frame_names}
 
     except Exception as e:
         logger.error(f"Video frames error: {str(e)}")
@@ -694,94 +695,6 @@ def execute_code(code: str) -> Dict[str, Any]:
     Returns:
         Dict containing stdout, stderr, and return_value (if any)
     """
-
-    # Create a safe globals dictionary with limited built-ins
-    def get_safe_globals():
-        # Start with an empty globals dictionary
-        safe_globals = {}
-
-        # Define a whitelist of safe modules that can be imported
-        SAFE_MODULES = {
-            "math",
-            "random",
-            "time",
-            "re",
-            "json",
-            "datetime",
-            "collections",
-            "itertools",
-            "functools",
-            "operator",
-            "statistics",
-            "decimal",
-            "fractions",
-            "string",
-            "copy",
-            "heapq",
-            "bisect",
-            "array",
-            "dataclasses",
-            "enum",
-            "numbers",
-            "typing",
-            "pandas",
-        }
-
-        # Create a safe import function that only allows whitelisted modules
-        def safe_import(name, *args, **kwargs):
-            if name not in SAFE_MODULES:
-                raise ImportError(
-                    f"Module '{name}' is not in the whitelist of safe modules"
-                )
-            return __import__(name, *args, **kwargs)
-
-        # Add safe builtins
-        safe_builtins = {
-            "abs": abs,
-            "all": all,
-            "any": any,
-            "bool": bool,
-            "chr": chr,
-            "dict": dict,
-            "dir": dir,
-            "divmod": divmod,
-            "enumerate": enumerate,
-            "filter": filter,
-            "float": float,
-            "format": format,
-            "frozenset": frozenset,
-            "hash": hash,
-            "hex": hex,
-            "int": int,
-            "isinstance": isinstance,
-            "issubclass": issubclass,
-            "len": len,
-            "list": list,
-            "map": map,
-            "max": max,
-            "min": min,
-            "oct": oct,
-            "ord": ord,
-            "pow": pow,
-            "print": print,  # Allow print for stdout capture
-            "range": range,
-            "repr": repr,
-            "reversed": reversed,
-            "round": round,
-            "set": set,
-            "slice": slice,
-            "sorted": sorted,
-            "str": str,
-            "sum": sum,
-            "tuple": tuple,
-            "type": type,
-            "zip": zip,
-            "__import__": safe_import,  # Add safe import function
-        }
-        safe_globals["__builtins__"] = safe_builtins
-
-        return safe_globals
-
     # Function to execute code with timeout
     def execute_with_timeout(code_str, globals_dict):
         # Create string buffers for stdout and stderr
@@ -805,54 +718,33 @@ def execute_code(code: str) -> Dict[str, Any]:
         }
 
     try:
-        # Set a timeout for code execution (5 seconds)
-        MAX_EXECUTION_TIME = 5  # seconds
+        # Set a timeout for code execution
+        MAX_EXECUTION_TIME = 30  # seconds
 
-        # Check for potentially dangerous operations
-        dangerous_patterns = [
-            # Dangerous direct imports
-            r"\bimport\s+os\b",
-            r"\bimport\s+sys\b",
-            r"\bimport\s+subprocess\b",
-            r"\bimport\s+shutil\b",
-            r"\bimport\s+socket\b",
-            r"\bimport\s+pathlib\b",
-            r"\bimport\s+pickle\b",
-            r"\bimport\s+importlib\b",
-            r"\bfrom\s+os\b",
-            r"\bfrom\s+sys\b",
-            r"\bfrom\s+subprocess\b",
-            r"\bfrom\s+shutil\b",
-            r"\bfrom\s+socket\b",
-            r"\bfrom\s+pathlib\b",
-            r"\bfrom\s+pickle\b",
-            r"\bfrom\s+importlib\b",
-            # Dangerous functions
-            r"\bopen\s*\(",
-            r"\beval\s*\(",
-            r"\bexec\s*\(",
-            r"\bcompile\s*\(",
-            r"\bgetattr\s*\(",
-            r"\bsetattr\s*\(",
-            r"\bdelattr\s*\(",
-            r"\b__import__\s*\(",  # Block direct use of __import__
-            r"\bhasattr\s*\(",
-            r"\bglobals\s*\(",
-            r"\blocals\s*\(",
-        ]
-
-        for pattern in dangerous_patterns:
-            if re.search(pattern, code):
-                return {
-                    "error": f"Security violation: Potentially dangerous operation detected"
-                }
-
-        # Get safe globals
-        safe_globals = get_safe_globals()
+        # Create a globals dictionary with access to standard modules
+        # Include the globals from current module and Python builtins
+        globals_dict = {
+            "__builtins__": __builtins__,
+            "np": np,
+            "pd": pd,
+            "plt": plt,
+            "math": math,
+            "re": re,
+            "os": os,
+            "sys": sys,
+            "time": time,
+            "io": io,
+            "json": json,
+            "hashlib": hashlib,
+            "threading": threading,
+            "subprocess": subprocess,
+            "random": random,
+            "requests": requests,
+        }
 
         # Execute code with timeout using ThreadPoolExecutor
         with ThreadPoolExecutor(max_workers=1) as executor:
-            future = executor.submit(execute_with_timeout, code, safe_globals)
+            future = executor.submit(execute_with_timeout, code, globals_dict)
             try:
                 # Wait for the result with timeout
                 execution_result = future.result(timeout=MAX_EXECUTION_TIME)

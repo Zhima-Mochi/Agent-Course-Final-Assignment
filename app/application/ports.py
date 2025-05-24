@@ -6,11 +6,6 @@ from app.domain.value_objects import Answer # Assuming Answer is defined here
 from app.domain.conversation import Message # For LLM interaction
 from app.domain.tool import Tool # For tool interactions
 
-# Forward declaration for OAuthProfile if not directly importable or to avoid circular deps
-class OAuthProfile:
-    def __init__(self, username: str = None):
-        self.username = username
-
 class LLMServicePort(Protocol):
     @abstractmethod
     def invoke_llm(self, messages: List[Message], tool_choice: Optional[str] = None, tools: Optional[List[Tool]] = None) -> Any:

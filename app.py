@@ -2,12 +2,12 @@ import logging
 from typing import Optional
 import os
 import gradio as gr
+import gradio.oauth
 import requests
 import inspect
 import pandas as pd
 from app.application.orchestrator import Orchestrator
 from app.config import settings
-from app.application.ports import OAuthProfile
 
 # Infrastructure - Adapters
 from app.infrastructure.api_task_gateway_adapter import APITaskGatewayAdapter
@@ -78,23 +78,25 @@ except Exception as e:
     orchestrator_instance = None
 
 # --- Gradio Interface Function ---
-def run_evaluation_wrapper(profile: Optional[OAuthProfile]) -> tuple[str, Optional[pd.DataFrame]]:
+def run_evaluation_wrapper(profile: gradio.oauth.OAuthProfile) -> tuple[str, Optional[pd.DataFrame]]:
+    # --- Determine HF Space Runtime URL and Repo URL ---
+    if profile:
+        username= f"{profile.username}"
+        logger.info(f"User logged in: {username}")
+    else:
+        logger.info("User not logged in.")
+        return "Please Login to Hugging Face with the button.", None
+
     if orchestrator_instance is None:
         error_msg = "Application components failed to initialize. Cannot run evaluation."
         logger.error(error_msg)
         return error_msg, None
-    
-    if not profile:
-        logger.warning("Attempted to run evaluation without login (profile is None).")
-        # Orchestrator.run_all_tasks handles None profile, but good to log here too.
-        # return "Please Login to Hugging Face.", None # This is handled by Orchestrator
-        pass # Let Orchestrator handle the no-profile case, it will return appropriate message
 
     # The space_id is now read from settings by the adapter if not provided.
     # Orchestrator's run_all_tasks expects space_id. We can pass settings.SPACE_ID
     # or None and let the adapter pick it up from settings.
     # For clarity, passing it from settings if available, or None.
-    space_id_to_pass = settings.SPACE_ID 
+    space_id_to_pass = settings.SPACE_ID or os.getenv("SPACE_ID")
 
     logger.info(f"run_evaluation_wrapper called. Profile: {profile.username if profile else 'No Profile'}, Space ID to pass: {space_id_to_pass}")
     return orchestrator_instance.run_all_tasks(profile, space_id_to_pass)
