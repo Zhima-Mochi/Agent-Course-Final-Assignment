@@ -44,7 +44,6 @@ app/
 app.py                  # Gradio entry-point
 requirements.txt        # pip users
 pyproject.toml          # poetry users
-tool_test.py            # minimal pytest sanity checks
 ```
 
 ---
