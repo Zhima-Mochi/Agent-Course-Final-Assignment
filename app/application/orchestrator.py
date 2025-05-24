@@ -200,9 +200,6 @@ class Orchestrator:
             questions_data = self.task_gateway.fetch_tasks()
             logger.info(f"Fetched {len(questions_data)} tasks from gateway")
             
-            # TODO: Remove this
-            questions_data = questions_data[6:7]
-            
             processor = TaskProcessor(
                 file_service=self.file_service,
                 tool_selector=self.tool_selector,

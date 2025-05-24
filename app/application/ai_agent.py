@@ -29,7 +29,8 @@ class AIAgent:
     """LangGraph agent with a *planner* stage and explicit continue logic."""
 
     name: str
-    llm: ChatOpenAI  # Still directly ChatOpenAI, not LLMServicePort. Handled by adapter for now.
+    # Still directly ChatOpenAI, not LLMServicePort. Handled by adapter for now.
+    llm: ChatOpenAI
     tools: List[Any]  # List of tools that can be used by the agent
     prompt_strategy: PromptStrategy  # Added prompt_strategy
     max_turns: int = 5  # Made max_turns a configurable parameter
@@ -137,12 +138,12 @@ class AIAgent:
         # ---------- assistant_think ---------- #
         def assistant_think(state: AgentState) -> AgentState:
             """Generate an answer using the tasks or internal reasoning (CoT enabled if set)."""
-            logger.info(f"Previous last  message: {state.get('messages', ["No messages"])[-1]}")
+            # logger.info(f"Previous last  message: {state.get('messages', ["No messages"])[-1]}")
             logger.info(f"[{self.name}] Assistant thinking...")
 
             if state.get("turn", 0) >= self.max_turns:  # Use self.max_turns
                 logger.warning(
-                    f"[{self.name}] Max turns reached ({state.get('turn',0)}); finalizing"
+                    f"[{self.name}] Max turns reached ({state.get('turn', 0)}); finalizing"
                 )
                 state["next"] = "assistant_finalize"
                 return state
@@ -150,7 +151,6 @@ class AIAgent:
             # Get current messages from state
             messages = state.get("messages", [])
 
- 
             if state.get("turn", 0) == 0:
                 messages.append(
                     HumanMessage(
@@ -161,11 +161,13 @@ class AIAgent:
             try:
                 # Ensure messages are passed correctly. messages should be List[BaseMessage]
                 result = llm_w_tools.invoke(messages)
-                logger.info(f"[{self.name}] Assistant response: {result.content or 'use tool calls'}")
+                logger.info(
+                    f"[{self.name}] Assistant response: {result.content or 'use tool calls'}")
             except Exception as e:
                 logger.exception(f"[{self.name}] LLM invocation failed: {e}")
                 messages.append(
-                    AIMessage(content=f"Error: failed to invoke LLM with tools, {e}")
+                    AIMessage(
+                        content=f"Error: failed to invoke LLM with tools, {e}")
                 )
                 state["messages"] = messages
                 state["next"] = "assistant_finalize"
@@ -202,37 +204,28 @@ class AIAgent:
                 else "❌ No answer generated."
             )
             clean = re.sub(r"```.*?```", "", raw, flags=re.DOTALL)
-            clean = re.sub(r"#CONTINUE", "", clean, flags=re.IGNORECASE).strip()
             final = None
-            # Numeric match
-            if m := re.fullmatch(r".*?(-?\d+(?:\.\d+)?)\D*$", clean):
-                final = m.group(1)
-            # Multiple-choice match
-            elif m := re.fullmatch(
-                r".*?\b([A-D](?:,[A-D])*)\b.*", clean
-            ):  # Added \b to ensure whole word match for A-D
-                final = m.group(1)
-            else:
-                # Fallback extraction
-                refine_prompt_messages = [  # Changed to list of messages
-                    SystemMessage(content="You are an answer extraction assistant."),
-                    HumanMessage(
-                        content=(
-                            f"Question: {state.get('question', '')}\n"
-                            "Extract ONLY the final answer from the text below. No explanations or conversational pleasantries.\n---\n"
-                            f"{clean}\n---"
-                        )
-                    ),
-                ]
-                try:
-                    refined_response = self.llm.invoke(
-                        refine_prompt_messages
-                    )  # invoke with list of messages
-                    final = refined_response.content.splitlines()[0].strip(" '\"")
-                    final = final.rstrip(".")
-                except Exception:
-                    logger.exception(f"[{self.name}] Error refining answer")
-                    final = clean[:500]  # Ensure final is not None
+
+            refine_prompt_messages = [  # Changed to list of messages
+                SystemMessage(
+                    content="You are an answer extraction assistant."),
+                HumanMessage(
+                    content=(
+                        f"Question: {state.get('question', '')}\n"
+                        "Extract ONLY the final answer from the text below. No explanations or conversational pleasantries.\n---\n"
+                        f"{clean}\n---"
+                    )
+                ),
+            ]
+            try:
+                refined_response = self.llm.invoke(
+                    refine_prompt_messages
+                )  # invoke with list of messages
+                final = refined_response.content.splitlines()[0].strip(" '\"")
+                final = final.rstrip(".")
+            except Exception:
+                logger.exception(f"[{self.name}] Error refining answer")
+                final = clean[:500]  # Ensure final is not None
 
             current_messages = state.get("messages", [])
             current_messages.append(
@@ -268,12 +261,14 @@ class AIAgent:
             lambda s: s.get("next", "assistant_think"),  # Use .get for safety
             {
                 "assistant_think": "assistant_think",
-                "assistant_finalize": "assistant_finalize",  # Should planner directly go to finalize? Unlikely.
+                # Should planner directly go to finalize? Unlikely.
+                "assistant_finalize": "assistant_finalize",
             },
         )
         g.add_conditional_edges(
             "assistant_think",
-            lambda s: s["next"],  # 'next' should always be set by assistant_think
+            # 'next' should always be set by assistant_think
+            lambda s: s["next"],
             {
                 "tools_node": "tools_node",
                 "assistant_think": "assistant_think",
@@ -283,7 +278,8 @@ class AIAgent:
         g.add_edge("tools_node", "assistant_think")
         g.add_edge("assistant_finalize", END)
 
-        logger.info(f"[{self.name}] Graph compiled; MAX_TURNS={self.max_turns}")
+        logger.info(
+            f"[{self.name}] Graph compiled; MAX_TURNS={self.max_turns}")
 
         graph = g.compile()
         # For debugging graph structure:

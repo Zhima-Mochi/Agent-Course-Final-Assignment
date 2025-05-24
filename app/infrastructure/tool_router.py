@@ -6,13 +6,13 @@ def route_tool(task: QuestionTask) -> str:
     Returns the tool name to be invoked in the LangGraph or execution context.
     """
     if is_youtube(task):
-        return "youtube_tool"
+        return "get_youtube_transcript"
     if is_audio(task):
-        return "asr_tool"
+        return "transcribe_audio"
     if is_image(task):
-        return "vision_tool"
+        return "ocr_image"
     if is_excel(task):
-        return "excel_tool"
+        return "read_file"
     return "llm_tool"  # default fallback
 
 

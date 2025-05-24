@@ -1,6 +1,7 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import Field # Import Field for env aliases if needed
 from typing import Optional
+import os
 
 class AppSettings(BaseSettings):
     # env_prefix can be used if your env variables have a common prefix e.g. MYAPP_
@@ -8,7 +9,9 @@ class AppSettings(BaseSettings):
 
     OPENAI_API_KEY: str
     SPACE_ID: Optional[str] = None # Or some other default if appropriate
-  
+    
+    GOOGLE_SEARCH_API_KEY: Optional[str] = None
+    GOOGLE_SEARCH_ENGINE_ID: Optional[str] = None
     LOG_LEVEL: str = "INFO"
 
     # Centralized OpenAI client configurations
@@ -20,6 +23,9 @@ class AppSettings(BaseSettings):
     # Using Field(..., alias='OPENAI_TIMEOUT_ENV_VAR') would be if env var name differs significantly.
     OPENAI_TIMEOUT: int = 30 # Corresponds to env var OPENAI_TIMEOUT
     OPENAI_MAX_TOKENS: int = 2000
+    
+    # Cache settings
+    CACHE_DIRECTORY: str = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'cache')
 
 # Create a single instance to be used throughout the application
 settings = AppSettings() 
