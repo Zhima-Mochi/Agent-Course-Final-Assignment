@@ -21,7 +21,7 @@ class Answer:
         } 
         
 @dataclass
-class AgentState(TypedDict):
+class AgentState:
     messages: Annotated[list, add_messages]
     question: str
     file_name: Optional[str]
