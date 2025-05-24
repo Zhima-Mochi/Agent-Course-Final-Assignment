@@ -7,7 +7,7 @@ class AppSettings(BaseSettings):
     # env_prefix can be used if your env variables have a common prefix e.g. MYAPP_
     model_config = SettingsConfigDict(env_file='.env', env_file_encoding='utf-8', extra='ignore')
 
-    OPENAI_API_KEY: str
+    OPENAI_API_KEY: str = "your_api_key"
     SPACE_ID: Optional[str] = None # Or some other default if appropriate
     
     GOOGLE_SEARCH_API_KEY: Optional[str] = None

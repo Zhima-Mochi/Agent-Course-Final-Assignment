@@ -6,6 +6,33 @@ from app.domain.value_objects import Answer # Assuming Answer is defined here
 from app.domain.conversation import Message # For LLM interaction
 from app.domain.tool import Tool # For tool interactions
 
+class ToolPort(Protocol):
+    """Interface for tool capabilities"""
+    name: str
+    description: str
+    
+    def execute(self, **kwargs) -> Dict[str, Any]:
+        """Execute the tool with the given parameters"""
+        pass
+
+class ToolProviderPort(ABC):
+    """Interface for tool provider services"""
+    
+    @abstractmethod
+    def get_tools(self) -> List[ToolPort]:
+        """Get all available tools"""
+        pass
+    
+    @abstractmethod
+    def get_tool_by_name(self, name: str) -> Optional[ToolPort]:
+        """Get a specific tool by name"""
+        pass
+    
+    @abstractmethod
+    def register_tool(self, tool: ToolPort) -> None:
+        """Register a new tool"""
+        pass
+
 class LLMServicePort(Protocol):
     @abstractmethod
     def invoke_llm(self, messages: List[Message], tool_choice: Optional[str] = None, tools: Optional[List[Tool]] = None) -> Any:

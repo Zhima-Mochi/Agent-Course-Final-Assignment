@@ -14,12 +14,11 @@ from app.infrastructure.api_task_gateway_adapter import APITaskGatewayAdapter
 from app.infrastructure.tool_selection_adapter import BasicToolSelectorAdapter
 from app.infrastructure.openai_llm_adapter import OpenAILLMAdapter
 from app.infrastructure.langgraph_agent_adapter import LangGraphAgentInitializerAdapter
+from app.infrastructure.tool_provider import LangchainToolProvider
+from app.application.tool_service import ToolService
 
 # Domain - for PromptStrategy if needed directly, or through adapter construction
 from app.domain.prompt_strategy import BasicPromptStrategy
-
-# Tooling - for Langchain tools if needed directly for adapter construction
-from app.infrastructure.tools_module import init_tools as get_langchain_tools
 
 # Create logs directory
 log_dir = "logs"
@@ -55,21 +54,26 @@ try:
     llm_service_adapter = OpenAILLMAdapter(app_settings=settings)
     # model_name, temperature etc. are now read from settings within OpenAILLMAdapter itself
     
-    langchain_tools_list = get_langchain_tools()
+    # Set up tool provider and service following clean architecture
+    tool_provider = LangchainToolProvider()
+    tool_service = ToolService(tool_provider)
+    
     prompt_strategy_instance = BasicPromptStrategy()
     
+    # Simplify tool initialization - pass the tools directly
     agent_initializer_adapter = LangGraphAgentInitializerAdapter(
         llm_service_port=llm_service_adapter,
-        lc_tools=langchain_tools_list, # Note: was langchain_tools, changed to lc_tools in adapter
+        lc_tools=tool_provider.get_tools(),
         prompt_strategy=prompt_strategy_instance
     )
 
-    # 3. Instantiate Orchestrator
+    # 3. Instantiate Orchestrator with the tool service
     orchestrator_instance = Orchestrator(
         task_gateway=task_gateway_adapter,
         agent_initializer_port=agent_initializer_adapter,
         file_service=file_service_adapter,
-        tool_selector=tool_selector_adapter
+        tool_selector=tool_selector_adapter,
+        tool_service=tool_service
     )
     logger.info("Orchestrator and all dependencies initialized successfully.")
 

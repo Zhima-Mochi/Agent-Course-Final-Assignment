@@ -52,7 +52,7 @@ pyproject.toml          # poetry users
 
 ### 1. Clone & Install
 ```bash
-git clone https://github.com/Zhima-Mochi/Agent-Course-Final-Assignment.git
+git clone https://huggingface.co/spaces/Zhima-Mochi/Agent-Course-Final-Assignment
 cd Agent-Course-Final-Assignment
 
 # Poetry (recommended)
@@ -90,15 +90,39 @@ Login with your HF account and hit **"Run all tasks"**.
 1. **Ports & Adapters** — `ports.py` defines abstract service contracts.
 2. **Domain layer** — pure Python models (`Task`, `Tool`, `Answer`, `AgentState`).
 3. **Application layer** — Orchestrator builds the LangGraph, selects tools, maintains conversation state.
-4. **Infrastructure layer** — concrete adapters
-   New tools only need:
+4. **Infrastructure layer** — concrete adapters (web search, yt-dlp, matplotlib plotter, etc.).
+   New tools can be added in two ways:
 
    ```python
+   # Option 1: Quick approach with LangChain decorator
    @tool
    def my_tool(input: str) -> str:
-       ...
-
-   tools_module.tools.append(my_tool)
+       """Tool description goes here."""
+       # Implementation
+       return result
+   
+   # Register it with the provider
+   from app.infrastructure.tool_provider import LangchainToolAdapter
+   tool_provider.register_tool(LangchainToolAdapter(my_tool))
+   
+   # Option 2: Clean architecture approach
+   from app.application.ports import ToolPort
+   
+   class MyCustomTool(ToolPort):
+       @property
+       def name(self) -> str:
+           return "my_custom_tool"
+       
+       @property
+       def description(self) -> str:
+           return "Does something useful with the input"
+       
+       def execute(self, input: str, **kwargs) -> Dict[str, Any]:
+           # Implementation
+           return {"result": processed_result}
+   
+   # Register with any ToolProviderPort implementation
+   tool_provider.register_tool(MyCustomTool())
    ```
 
 ---

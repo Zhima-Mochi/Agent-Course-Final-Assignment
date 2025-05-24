@@ -15,12 +15,10 @@ from app.application.ports import (
     AgentInitializationPort,
     TaskGatewayPort
 )
-from app.infrastructure.env_config import initialize_environment
 from app.domain.tool import Tool as DomainTool
-from app.infrastructure.tools_module import init_tools as get_langchain_tools
+from app.application.tool_service import ToolService
 
 logger = logging.getLogger(__name__)
-initialize_environment()
 
 class TaskProcessor:
     """Handles the processing of individual tasks using injected services (ports)."""
@@ -126,25 +124,18 @@ class Orchestrator:
                  task_gateway: TaskGatewayPort,
                  agent_initializer_port: AgentInitializationPort,
                  file_service: FileServicePort,
-                 tool_selector: ToolSelectorPort):
+                 tool_selector: ToolSelectorPort,
+                 tool_service: ToolService):
         self.task_gateway = task_gateway
         self.file_service = file_service
         self.tool_selector = tool_selector
+        self.tool_service = tool_service
 
-        # Initialize Langchain tools and corresponding domain tool descriptions
-        self.langchain_tools: List[Any] = get_langchain_tools()
-        self.domain_tool_descriptions: List[DomainTool] = []
-        for lc_tool in self.langchain_tools:
-            if hasattr(lc_tool, 'name') and hasattr(lc_tool, 'description'):
-                self.domain_tool_descriptions.append(
-                    DomainTool(name=lc_tool.name, description=lc_tool.description)
-                )
-            else:
-                # Handle cases where tools might not have name/description as expected
-                logger.warning(f"Tool object {str(lc_tool)} lacks name or description attribute.")
-
+        # Use the tool service to get domain tools
+        self.domain_tool_descriptions = self.tool_service.get_all_tools()
+        
+        # Get Langchain tools via the agent initializer (which should be configured properly)
         self.agent_initializer_port = agent_initializer_port
-
         self.agent_graph_port = self._initialize_agent_once()
 
     def _initialize_agent_once(self) -> AgentGraphPort:

@@ -17,6 +17,7 @@ from app.domain.prompt_strategy import (
     PromptStrategy,
     BasicPromptStrategy,
 )  # Import PromptStrategy
+from app.application.ports import ToolPort
 
 logger = logging.getLogger(__name__)
 

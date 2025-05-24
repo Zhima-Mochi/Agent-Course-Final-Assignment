@@ -3,7 +3,7 @@ from typing import Any, Dict, List, Optional
 
 from langchain_core.tools import BaseTool # For type hinting
 
-from app.application.ports import AgentInitializationPort, AgentGraphPort, LLMServicePort
+from app.application.ports import AgentInitializationPort, AgentGraphPort, LLMServicePort, ToolPort
 from app.application.ai_agent import AIAgent # Updated import path
 from app.domain.value_objects import AgentState # Ensure this is the correct AgentState
 from app.domain.prompt_strategy import PromptStrategy, BasicPromptStrategy # Import PromptStrategy
@@ -43,41 +43,45 @@ class LangGraphAgentGraphAdapter(AgentGraphPort):
 
 class LangGraphAgentInitializerAdapter(AgentInitializationPort):
     """Adapter for initializing the LangGraph-based AIAgent."""
-    # Updated constructor signature to match user's snippet (lc_tools: List[BaseTool])
     def __init__(self, 
                  llm_service_port: LLMServicePort, 
-                 lc_tools: List[BaseTool], # Changed from langchain_tools: List[Any]
+                 lc_tools: List[ToolPort], # Accept our ToolPort objects directly
                  prompt_strategy: Optional[PromptStrategy] = None):
         self.llm_service_port = llm_service_port
-        self.lc_tools = lc_tools # Renamed from self.langchain_tools
+        self.tools = lc_tools # Store as tools, not specifically lc_tools
         self.prompt_strategy = prompt_strategy if prompt_strategy is not None else BasicPromptStrategy()
         
-        if not self.lc_tools:
-            logger.warning("LangGraphAgentInitializerAdapter initialized with an empty list of Langchain tools.")
-        
-        # Removed isinstance check for llm_service_port as per user instruction
+        if not self.tools:
+            logger.warning("LangGraphAgentInitializerAdapter initialized with an empty list of tools.")
 
     def initialize_agent_graph(self) -> AgentGraphPort:
         logger.debug("Initializing LangGraph agent with provided tools using port.get_llm()...")
         try:
-            # Grab the concrete LLM via the port, no isinstance hacks
+            # Grab the concrete LLM via the port
             llm = self.llm_service_port.get_llm()
 
-            # Ensure llm is not None or an unexpected type if get_llm() could return that
-            if llm is None: # Basic check, could be more specific if LLMServicePort.get_llm() has clearer contract
+            # Ensure llm is not None
+            if llm is None:
                 raise ValueError("LLM instance from llm_service_port.get_llm() is None.")
+
+            # Extract actual tools for tools that are adapters
+            actual_tools = []
+            for tool in self.tools:
+                if hasattr(tool, 'langchain_tool'):
+                    actual_tools.append(tool.langchain_tool)
+                else:
+                    actual_tools.append(tool)  # Use the tool directly if it's not an adapter
 
             agent = AIAgent(
                 name="StructuredMultimodalAgent", 
-                llm=llm,  # Pass the LLM instance obtained via the port
-                tools=self.lc_tools,
+                llm=llm,
+                tools=actual_tools,  # Use the extracted tools
                 prompt_strategy=self.prompt_strategy,
                 max_turns=10
             )
             graph = agent.to_langgraph_agent()
             return LangGraphAgentGraphAdapter(graph)
 
-        except Exception as e: # Catching generic Exception and re-raising specific or as-is
+        except Exception as e:
             logger.exception("Failed to build LangGraph agent")
-            # Re-raise the original exception to preserve stack trace and type
-            raise # Same as raise e, but preserves original traceback better in some Python versions 
+            raise 
