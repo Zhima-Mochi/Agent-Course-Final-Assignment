@@ -16,7 +16,6 @@ from app.infrastructure.openai_llm_adapter import OpenAILLMAdapter
 from app.infrastructure.langgraph_agent_adapter import LangGraphAgentInitializerAdapter
 from app.infrastructure.tool_provider import LangchainToolProvider
 from app.application.tool_service import ToolService
-from app.infrastructure.telemetry_factory import get_tracer_adapter
 
 # Domain - for PromptStrategy if needed directly, or through adapter construction
 from app.domain.prompt_strategy import BasicPromptStrategy
@@ -43,8 +42,6 @@ logger.info(f"Application starting with log level: {log_level_str}")
 
 # --- Initialize Application Components (Dependency Injection) ---
 try:
-    # Note: The tracer is now initialized by the factory
-    
     # 1. Settings object is `app.config.settings`
     logger.info(f"SPACE_ID from settings: {settings.SPACE_ID}")
     logger.info(f"OpenAI Model from settings: {settings.OPENAI_MODEL_NAME}")
@@ -67,20 +64,17 @@ try:
     agent_initializer_adapter = LangGraphAgentInitializerAdapter(
         llm_service_port=llm_service_adapter,
         lc_tools=tool_provider.get_tools(),
-        prompt_strategy=prompt_strategy_instance
+        prompt_strategy=prompt_strategy_instance,
+        enable_tracing=settings.ENABLE_TRACING,
     )
 
-    # Get the tracer adapter from the factory
-    tracer_adapter = get_tracer_adapter()
-
-    # 3. Instantiate Orchestrator with the tool service and tracer
+    # 3. Instantiate Orchestrator with the tool service
     orchestrator_instance = Orchestrator(
         task_gateway=task_gateway_adapter,
         agent_initializer_port=agent_initializer_adapter,
         file_service=file_service_adapter,
         tool_selector=tool_selector_adapter,
         tool_service=tool_service,
-        tracer=tracer_adapter
     )
     logger.info("Orchestrator and all dependencies initialized successfully.")
 
@@ -163,9 +157,6 @@ if __name__ == "__main__":
 
     print("-"*(60 + len(" App Starting ")) + "\n")
 
-    # Note: We no longer need to initialize OpenTelemetry here
-    # as the factory handles initialization of the correct provider
-    
     print("Launching Gradio Interface for Basic Agent Evaluation...")
     if orchestrator_instance is None:
         print("ERROR: Orchestrator failed to initialize. Gradio interface might not function correctly or at all.")

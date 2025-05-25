@@ -7,6 +7,7 @@ from typing import Callable
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 from langgraph.graph import END, START, StateGraph
+from langgraph.graph.state import CompiledStateGraph
 from langgraph.prebuilt import ToolNode
 
 # from langgraph.graph.message import add_messages # This import seems unused
@@ -36,7 +37,7 @@ class AIAgent:
     prompt_strategy: PromptStrategy  # Added prompt_strategy
     max_turns: int = 5  # Made max_turns a configurable parameter
 
-    def to_langgraph_agent(self) -> Any:
+    def to_langgraph_agent(self) -> CompiledStateGraph:
         """
         Compile the agent's state graph.
 
@@ -241,6 +242,7 @@ class AIAgent:
             )
             state["messages"] = current_messages
             state["next"] = END
+            state["answer"] = final
             logger.info(f"[{self.name}] Final answer: {final}")
             return state
 

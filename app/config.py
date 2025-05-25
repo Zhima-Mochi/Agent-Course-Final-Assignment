@@ -31,6 +31,7 @@ class AppSettings(BaseSettings):
     TELEMETRY_PROVIDER: Literal["langfuse", "none"] = "none"
     
     # Langfuse settings
+    ENABLE_TRACING: bool = False
     LANGFUSE_PUBLIC_KEY: Optional[str] = None
     LANGFUSE_SECRET_KEY: Optional[str] = None 
     LANGFUSE_HOST: str = "https://cloud.langfuse.com"

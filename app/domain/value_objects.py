@@ -25,10 +25,9 @@ class Answer:
 
 class AgentState(TypedDict):
     messages: Annotated[list, add_messages]
-    question: str
-    file_name: Optional[str]
     file_path: Optional[str]
-    tool_used: Optional[str]
-    llm_output: Optional[str]
+    question: str
+    answer: Optional[str]
+    tool_hint: Optional[str]
     turn: int
     next: Optional[str]

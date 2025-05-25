@@ -3,15 +3,22 @@ from typing import Any, Dict, List, Optional, Callable
 
 from langchain_core.tools import BaseTool  # For type hinting
 
-from app.application.ports import AgentInitializationPort, AgentGraphPort, LLMServicePort
+from app.application.ports import (
+    AgentInitializationPort,
+    AgentGraphPort,
+    LLMServicePort,
+)
 from app.application.ai_agent import AIAgent  # Updated import path
+
 # Ensure this is the correct AgentState
 from app.domain.value_objects import AgentState
+
 # Import PromptStrategy
 from app.domain.prompt_strategy import PromptStrategy, BasicPromptStrategy
-# from app.infrastructure.tools_module import init_tools # No longer called here
-# from app.infrastructure.llm_service import LLMService # Original direct usage
-# from app.infrastructure.openai_llm_adapter import OpenAILLMAdapter # No longer needed for isinstance checks
+
+# Import Langfuse tracing adapter
+from langfuse.callback import CallbackHandler
+from app.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -49,18 +56,25 @@ class LangGraphAgentGraphAdapter(AgentGraphPort):
 class LangGraphAgentInitializerAdapter(AgentInitializationPort):
     """Adapter for initializing the LangGraph-based AIAgent."""
 
-    def __init__(self,
-                 llm_service_port: LLMServicePort,
-                 # Accept our Callable objects directly
-                 lc_tools: List[Callable],
-                 prompt_strategy: Optional[PromptStrategy] = None):
+    def __init__(
+        self,
+        llm_service_port: LLMServicePort,
+        # Accept our Callable objects directly
+        lc_tools: List[Callable],
+        prompt_strategy: Optional[PromptStrategy] = None,
+        enable_tracing: bool = False,
+    ):
         self.llm_service_port = llm_service_port
         self.tools = lc_tools  # Store as tools, not specifically lc_tools
-        self.prompt_strategy = prompt_strategy if prompt_strategy is not None else BasicPromptStrategy()
+        self.prompt_strategy = (
+            prompt_strategy if prompt_strategy is not None else BasicPromptStrategy()
+        )
+        self.enable_tracing = enable_tracing
 
         if not self.tools:
             logger.warning(
-                "LangGraphAgentInitializerAdapter initialized with an empty list of tools.")
+                "LangGraphAgentInitializerAdapter initialized with an empty list of tools."
+            )
 
     def initialize_agent_graph(self) -> AgentGraphPort:
         try:
@@ -70,7 +84,8 @@ class LangGraphAgentInitializerAdapter(AgentInitializationPort):
             # Ensure llm is not None
             if llm is None:
                 raise ValueError(
-                    "LLM instance from llm_service_port.get_llm() is None.")
+                    "LLM instance from llm_service_port.get_llm() is None."
+                )
 
             # Extract actual tools for tools that are adapters
             actual_tools = []
@@ -83,9 +98,23 @@ class LangGraphAgentInitializerAdapter(AgentInitializationPort):
                 llm=llm,
                 tools=actual_tools,  # Use the extracted tools
                 prompt_strategy=self.prompt_strategy,
-                max_turns=10
+                max_turns=10,
             )
             graph = agent.to_langgraph_agent()
+
+            callbacks = []
+
+            # Add Langfuse tracing if enabled
+            if self.enable_tracing:
+                handler = CallbackHandler(
+                    public_key=settings.LANGFUSE_PUBLIC_KEY,
+                    secret_key=settings.LANGFUSE_SECRET_KEY,
+                    host=settings.LANGFUSE_HOST,
+                )
+
+                callbacks.append(handler)
+            graph = graph.with_config({"callbacks": callbacks})
+
             return LangGraphAgentGraphAdapter(graph)
 
         except Exception as e:
