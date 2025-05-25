@@ -16,6 +16,7 @@ from app.infrastructure.openai_llm_adapter import OpenAILLMAdapter
 from app.infrastructure.langgraph_agent_adapter import LangGraphAgentInitializerAdapter
 from app.infrastructure.tool_provider import LangchainToolProvider
 from app.application.tool_service import ToolService
+from app.infrastructure.telemetry_factory import get_tracer_adapter
 
 # Domain - for PromptStrategy if needed directly, or through adapter construction
 from app.domain.prompt_strategy import BasicPromptStrategy
@@ -42,6 +43,8 @@ logger.info(f"Application starting with log level: {log_level_str}")
 
 # --- Initialize Application Components (Dependency Injection) ---
 try:
+    # Note: The tracer is now initialized by the factory
+    
     # 1. Settings object is `app.config.settings`
     logger.info(f"SPACE_ID from settings: {settings.SPACE_ID}")
     logger.info(f"OpenAI Model from settings: {settings.OPENAI_MODEL_NAME}")
@@ -67,13 +70,17 @@ try:
         prompt_strategy=prompt_strategy_instance
     )
 
-    # 3. Instantiate Orchestrator with the tool service
+    # Get the tracer adapter from the factory
+    tracer_adapter = get_tracer_adapter()
+
+    # 3. Instantiate Orchestrator with the tool service and tracer
     orchestrator_instance = Orchestrator(
         task_gateway=task_gateway_adapter,
         agent_initializer_port=agent_initializer_adapter,
         file_service=file_service_adapter,
         tool_selector=tool_selector_adapter,
-        tool_service=tool_service
+        tool_service=tool_service,
+        tracer=tracer_adapter
     )
     logger.info("Orchestrator and all dependencies initialized successfully.")
 
@@ -85,11 +92,10 @@ except Exception as e:
 def run_evaluation_wrapper(profile: gradio.oauth.OAuthProfile) -> tuple[str, Optional[pd.DataFrame]]:
     # --- Determine HF Space Runtime URL and Repo URL ---
     if profile:
-        username= f"{profile.username}"
+        username = f"{profile.username}"
         logger.info(f"User logged in: {username}")
     else:
         logger.info("User not logged in.")
-        return "Please Login to Hugging Face with the button.", None
 
     if orchestrator_instance is None:
         error_msg = "Application components failed to initialize. Cannot run evaluation."
@@ -103,7 +109,8 @@ def run_evaluation_wrapper(profile: gradio.oauth.OAuthProfile) -> tuple[str, Opt
     space_id_to_pass = settings.SPACE_ID or os.getenv("SPACE_ID")
 
     logger.info(f"run_evaluation_wrapper called. Profile: {profile.username if profile else 'No Profile'}, Space ID to pass: {space_id_to_pass}")
-    return orchestrator_instance.run_all_tasks(profile, space_id_to_pass)
+    result = orchestrator_instance.run_all_tasks(profile, space_id_to_pass)
+    return result
 
 
 # --- Build Gradio Interface using Blocks ---
@@ -156,6 +163,9 @@ if __name__ == "__main__":
 
     print("-"*(60 + len(" App Starting ")) + "\n")
 
+    # Note: We no longer need to initialize OpenTelemetry here
+    # as the factory handles initialization of the correct provider
+    
     print("Launching Gradio Interface for Basic Agent Evaluation...")
     if orchestrator_instance is None:
         print("ERROR: Orchestrator failed to initialize. Gradio interface might not function correctly or at all.")

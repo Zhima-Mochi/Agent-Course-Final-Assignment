@@ -1,6 +1,6 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import Field # Import Field for env aliases if needed
-from typing import Optional
+from typing import Optional, Literal
 import os
 
 class AppSettings(BaseSettings):
@@ -26,6 +26,16 @@ class AppSettings(BaseSettings):
     
     # Cache settings
     CACHE_DIRECTORY: str = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'cache')
+    
+    # Telemetry settings
+    TELEMETRY_PROVIDER: Literal["langfuse", "none"] = "none"
+    
+    # Langfuse settings
+    LANGFUSE_PUBLIC_KEY: Optional[str] = None
+    LANGFUSE_SECRET_KEY: Optional[str] = None 
+    LANGFUSE_HOST: str = "https://cloud.langfuse.com"
+    LANGFUSE_PROJECT_NAME: Optional[str] = "agent-evaluation"
+    LANGFUSE_DEBUG: bool = False
 
 # Create a single instance to be used throughout the application
 settings = AppSettings() 

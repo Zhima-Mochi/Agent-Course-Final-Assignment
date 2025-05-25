@@ -1,35 +1,27 @@
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional, Protocol
+from typing import Any, Dict, List, Optional, Callable, Protocol
+from contextlib import ContextDecorator
 
 from app.domain.task import QuestionTask # Assuming QuestionTask is defined here
 from app.domain.value_objects import Answer # Assuming Answer is defined here
 from app.domain.conversation import Message # For LLM interaction
 from app.domain.tool import Tool # For tool interactions
 
-class ToolPort(Protocol):
-    """Interface for tool capabilities"""
-    name: str
-    description: str
-    
-    def execute(self, **kwargs) -> Dict[str, Any]:
-        """Execute the tool with the given parameters"""
-        pass
-
 class ToolProviderPort(ABC):
     """Interface for tool provider services"""
     
     @abstractmethod
-    def get_tools(self) -> List[ToolPort]:
+    def get_tools(self) -> List[Callable]:
         """Get all available tools"""
         pass
     
     @abstractmethod
-    def get_tool_by_name(self, name: str) -> Optional[ToolPort]:
+    def get_tool_by_name(self, name: str) -> Optional[Callable]:
         """Get a specific tool by name"""
         pass
     
     @abstractmethod
-    def register_tool(self, tool: ToolPort) -> None:
+    def register_tool(self, tool: Callable) -> None:
         """Register a new tool"""
         pass
 
@@ -80,3 +72,17 @@ class AgentInitializationPort(ABC):
     @abstractmethod
     def initialize_agent_graph(self) -> AgentGraphPort:
         pass 
+
+class TracerPort(ABC):
+    """Simplified interface for tracing and observability."""
+
+    @abstractmethod
+    def trace(self, name: str, metadata: Optional[Dict[str, Any]] = None) -> ContextDecorator:
+        """Start a trace/span. Use as a context manager:  
+        with tracer.trace('op', {...}): ..."""
+        pass
+
+    @abstractmethod
+    def span(self, name: str, metadata: Optional[Dict[str, Any]] = None) -> ContextDecorator:
+        """Attach metadata or error info to the current span/trace."""
+        pass

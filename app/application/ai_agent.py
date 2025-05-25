@@ -3,7 +3,7 @@ import logging
 import re
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
-
+from typing import Callable
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 from langgraph.graph import END, START, StateGraph
@@ -17,7 +17,7 @@ from app.domain.prompt_strategy import (
     PromptStrategy,
     BasicPromptStrategy,
 )  # Import PromptStrategy
-from app.application.ports import ToolPort
+
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +32,7 @@ class AIAgent:
     name: str
     # Still directly ChatOpenAI, not LLMServicePort. Handled by adapter for now.
     llm: ChatOpenAI
-    tools: List[Any]  # List of tools that can be used by the agent
+    tools: List[Callable]  # List of tools that can be used by the agent
     prompt_strategy: PromptStrategy  # Added prompt_strategy
     max_turns: int = 5  # Made max_turns a configurable parameter
 

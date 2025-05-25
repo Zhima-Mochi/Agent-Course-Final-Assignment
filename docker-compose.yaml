@@ -1,0 +1,24 @@
+services:
+  langfuse:
+    image: langfuse/langfuse:2
+    ports:
+      - "8080:3000"
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@db:5432/langfuse
+      NEXTAUTH_SECRET: om99QP3+egJdm01ZpWmtTEUz3ZD2U5arpb90+Xdqeb8=
+      NEXTAUTH_URL: http://localhost:8080
+      SALT: f571260fad8dbec1adc1fc9f43bb1d96adab4533e3ecee5c6f9d522996ff2e1e
+    depends_on:
+      - db
+
+  db:
+    image: postgres:14
+    environment:
+      POSTGRES_DB: langfuse
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - langfuse_pg_data:/var/lib/postgresql/data
+
+volumes:
+  langfuse_pg_data:

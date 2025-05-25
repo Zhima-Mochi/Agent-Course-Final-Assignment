@@ -1,5 +1,5 @@
 from typing import List, Dict, Any, Optional, Callable
-from app.application.ports import ToolPort, ToolProviderPort
+from app.application.ports import ToolProviderPort
 from app.domain.tool import Tool
 
 class ToolService:

@@ -1,9 +1,9 @@
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Callable
 
 from langchain_core.tools import BaseTool  # For type hinting
 
-from app.application.ports import AgentInitializationPort, AgentGraphPort, LLMServicePort, ToolPort
+from app.application.ports import AgentInitializationPort, AgentGraphPort, LLMServicePort
 from app.application.ai_agent import AIAgent  # Updated import path
 # Ensure this is the correct AgentState
 from app.domain.value_objects import AgentState
@@ -51,8 +51,8 @@ class LangGraphAgentInitializerAdapter(AgentInitializationPort):
 
     def __init__(self,
                  llm_service_port: LLMServicePort,
-                 # Accept our ToolPort objects directly
-                 lc_tools: List[ToolPort],
+                 # Accept our Callable objects directly
+                 lc_tools: List[Callable],
                  prompt_strategy: Optional[PromptStrategy] = None):
         self.llm_service_port = llm_service_port
         self.tools = lc_tools  # Store as tools, not specifically lc_tools
