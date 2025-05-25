@@ -26,6 +26,7 @@ The codebase is the capstone project for the "Build Your Own Agent" course.
 | **Gradio UI with HF OAuth** | `app.py` exposes a one-click web UI; users must sign in with Hugging Face to run tasks. |
 | **Data-frame output** | Answers are returned both as chat text and as a Pandas `DataFrame` for easy CSV export. |
 | **Safe code execution** | Built-in sandbox. |
+| **Langfuse tracing** | Integrated LLM observability and tracing with Langfuse. |
 
 ---
 
@@ -65,13 +66,17 @@ pip install -r requirements.txt
 
 ### 2. Set Environment Variables
 
-| Variable                        | Description                        |
-| ------------------------------- | ---------------------------------- |
-| `OPENAI_API_KEY`                | Key for OpenAI API                 |
-| `OPENAI_MODEL_NAME`             | Model name for OpenAI API          |
-| `GOOGLE_SEARCH_API_KEY`         | Key for Google Search API          |
-| `GOOGLE_SEARCH_ENGINE_ID`       | Google Search Engine ID            |
-| `SPACE_ID` (optional)           | HF Space slug if deploying there   |
+| Variable                        | Description                         |
+| ------------------------------- | ----------------------------------- |
+| `OPENAI_API_KEY`                | Key for OpenAI API                  |
+| `OPENAI_MODEL_NAME`             | Model name for OpenAI API           |
+| `GOOGLE_SEARCH_API_KEY`         | Key for Google Search API           |
+| `GOOGLE_SEARCH_ENGINE_ID`       | Google Search Engine ID             |
+| `SPACE_ID` (optional)           | HF Space slug if deploying there    |
+| `ENABLE_TRACING`                | Enable Langfuse tracing (true/false)|
+| `LANGFUSE_PUBLIC_KEY`           | Langfuse public API key             |
+| `LANGFUSE_SECRET_KEY`           | Langfuse secret API key             |
+| `LANGFUSE_HOST`                 | Langfuse host URL                   |
 
 Create a `.env` file or export them in your shell.
 
@@ -91,10 +96,9 @@ Login with your HF account and hit **"Run all tasks"**.
 2. **Domain layer** — pure Python models (`Task`, `Tool`, `Answer`, `AgentState`).
 3. **Application layer** — Orchestrator builds the LangGraph, selects tools, maintains conversation state.
 4. **Infrastructure layer** — concrete adapters (web search, yt-dlp, matplotlib plotter, etc.).
-   New tools can be added in two ways:
+   New tools can be added in the following way:
 
    ```python
-   # Option 1: Quick approach with LangChain decorator
    @tool
    def my_tool(input: str) -> str:
        """Tool description goes here."""
@@ -104,25 +108,6 @@ Login with your HF account and hit **"Run all tasks"**.
    # Register it with the provider
    from app.infrastructure.tool_provider import LangchainToolAdapter
    tool_provider.register_tool(LangchainToolAdapter(my_tool))
-   
-   # Option 2: Clean architecture approach
-   from app.application.ports import ToolPort
-   
-   class MyCustomTool(ToolPort):
-       @property
-       def name(self) -> str:
-           return "my_custom_tool"
-       
-       @property
-       def description(self) -> str:
-           return "Does something useful with the input"
-       
-       def execute(self, input: str, **kwargs) -> Dict[str, Any]:
-           # Implementation
-           return {"result": processed_result}
-   
-   # Register with any ToolProviderPort implementation
-   tool_provider.register_tool(MyCustomTool())
    ```
 
 ---
@@ -132,3 +117,20 @@ Login with your HF account and hit **"Run all tasks"**.
 1. Push the repo to a Space with **SDK = gradio**.
 2. Set the same env vars in the Space's **Secrets** panel.
 3. The Gradio UI boots automatically on every commit.
+
+---
+
+## 📊 Observability with Langfuse
+
+This project includes integration with [Langfuse](https://langfuse.com) for LLM observability and tracing.
+
+### What's being traced
+
+The application uses Langfuse to trace:
+
+- LLM calls through the LangGraph agent
+- Tool selections and executions
+- Agent state transitions
+- Performance metrics
+
+View traces in the Langfuse UI to analyze agent behavior, identify bottlenecks, and improve performance.
