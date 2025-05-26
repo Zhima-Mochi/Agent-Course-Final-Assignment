@@ -31,3 +31,9 @@ class AgentState(TypedDict):
     tool_hint: Optional[str]
     turn: int
     next: Optional[str]
+
+@dataclass
+class QuestionTask:
+    task_id: str
+    question: str
+    file_name: Optional[str] = None

@@ -5,8 +5,7 @@ from typing import Dict, Any, List, Optional
 from langchain_core.messages import HumanMessage
 import requests
 
-from app.domain.task import QuestionTask
-from app.domain.value_objects import Answer, AgentState
+from app.domain.value_objects import Answer, AgentState, QuestionTask
 from app.application.langgraph_agent import LangGraphAgent
 
 logger = logging.getLogger(__name__)
