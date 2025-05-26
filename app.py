@@ -6,21 +6,18 @@ import gradio.oauth
 import requests
 import inspect
 import pandas as pd
-from app.application.orchestrator import Orchestrator
+from app.application.task_processor import TaskProcessor
+from app.task_controller import TaskController
 from app.config import settings
 
 # Application Layer - Direct implementations
 from app.application.llm_service import OpenAILLMService
-from app.application.langgraph_agent import LangGraphAgent, LangGraphAgentGraph
+from app.application.langgraph_agent import LangGraphAgent
 
 # Infrastructure - Adapters that we're still using
 from app.infrastructure.api_task_gateway_adapter import APITaskGatewayAdapter
-from app.infrastructure.tool_selection_adapter import BasicToolSelectorAdapter
-from app.infrastructure.tool_provider import LangchainToolProvider
-from app.application.tool_service import ToolService
+from app.infrastructure.tool_provider import ToolProvider
 
-# Domain - for PromptStrategy if needed directly
-from app.domain.prompt_strategy import BasicPromptStrategy
 
 # Create logs directory
 log_dir = "logs"
@@ -44,51 +41,40 @@ logger.info(f"Application starting with log level: {log_level_str}")
 
 # --- Initialize Application Components (Dependency Injection) ---
 try:
-    # 1. Settings object is `app.config.settings`
     logger.info(f"SPACE_ID from settings: {settings.SPACE_ID}")
     logger.info(f"OpenAI Model from settings: {settings.OPENAI_MODEL_NAME}")
 
-    # 2. Instantiate services and adapters
-    task_gateway_adapter = APITaskGatewayAdapter(app_settings=settings)
-    file_service_adapter = task_gateway_adapter 
-    tool_selector_adapter = BasicToolSelectorAdapter()
-    
-    # Direct implementation instead of adapter
     llm_service = OpenAILLMService(app_settings=settings)
-    
-    # Set up tool provider and service
-    tool_provider = LangchainToolProvider()
-    tool_service = ToolService(tool_provider)
-    
-    prompt_strategy_instance = BasicPromptStrategy()
-    
-    # Use direct LangGraph implementation
-    agent = LangGraphAgent(
+    tool_provider = ToolProvider()
+
+    langgraph_agent = LangGraphAgent(
         name="StructuredMultimodalAgent",
         llm_service=llm_service,
         tools=tool_provider.get_tools(),
-        prompt_strategy=prompt_strategy_instance,
         enable_tracing=settings.ENABLE_TRACING,
     )
-    
-    # Initialize the graph
-    agent_graph = agent.initialize_graph()
 
-    # 3. Instantiate Orchestrator with all the components
-    orchestrator_instance = Orchestrator(
-        task_gateway=task_gateway_adapter,
-        agent_graph=agent_graph,  # Pass the graph directly
-        file_service=file_service_adapter,
-        tool_selector=tool_selector_adapter,
-        tool_service=tool_service,
+    task_processor = TaskProcessor(
+        langgraph_agent=langgraph_agent,
     )
+
+    task_gateway_adapter = APITaskGatewayAdapter(app_settings=settings)
+
+    controller = TaskController(
+        task_gateway=task_gateway_adapter,
+        task_processor=task_processor,
+    )
+
     logger.info("Orchestrator and all dependencies initialized successfully.")
 
 except Exception as e:
-    logger.exception("Failed to initialize application components. Application will not run correctly.")
-    orchestrator_instance = None
+    logger.exception(
+        "Failed to initialize application components. Application will not run correctly.")
+    controller = None
 
 # --- Gradio Interface Function ---
+
+
 def run_evaluation_wrapper(profile: gradio.oauth.OAuthProfile) -> tuple[str, Optional[pd.DataFrame]]:
     # --- Determine HF Space Runtime URL and Repo URL ---
     if profile:
@@ -97,7 +83,7 @@ def run_evaluation_wrapper(profile: gradio.oauth.OAuthProfile) -> tuple[str, Opt
     else:
         logger.info("User not logged in.")
 
-    if orchestrator_instance is None:
+    if controller is None:
         error_msg = "Application components failed to initialize. Cannot run evaluation."
         logger.error(error_msg)
         return error_msg, None
@@ -108,8 +94,9 @@ def run_evaluation_wrapper(profile: gradio.oauth.OAuthProfile) -> tuple[str, Opt
     # For clarity, passing it from settings if available, or None.
     space_id_to_pass = settings.SPACE_ID or os.getenv("SPACE_ID")
 
-    logger.info(f"run_evaluation_wrapper called. Profile: {profile.username if profile else 'No Profile'}, Space ID to pass: {space_id_to_pass}")
-    result = orchestrator_instance.run_all_tasks(profile, space_id_to_pass)
+    logger.info(
+        f"run_evaluation_wrapper called. Profile: {profile.username if profile else 'No Profile'}, Space ID to pass: {space_id_to_pass}")
+    result = controller.process_all_tasks(profile, space_id_to_pass)
     return result
 
 
@@ -135,9 +122,11 @@ with gr.Blocks() as demo:
 
     run_button = gr.Button("Run Evaluation & Submit All Answers")
 
-    status_output = gr.Textbox(label="Run Status / Submission Result", lines=5, interactive=False)
+    status_output = gr.Textbox(
+        label="Run Status / Submission Result", lines=5, interactive=False)
     # Removed max_rows=10 from DataFrame constructor
-    results_table = gr.DataFrame(label="Questions and Agent Answers", wrap=True)
+    results_table = gr.DataFrame(
+        label="Questions and Agent Answers", wrap=True)
 
     run_button.click(
         fn=run_evaluation_wrapper,
@@ -147,26 +136,29 @@ with gr.Blocks() as demo:
 if __name__ == "__main__":
     print("\n" + "-"*30 + " App Starting " + "-"*30)
     space_host_startup = os.getenv("SPACE_HOST")
-    
+
     if space_host_startup:
         print(f"✅ SPACE_HOST found: {space_host_startup}")
-        print(f"   Runtime URL should be: https://{space_host_startup}.hf.space")
+        print(
+            f"   Runtime URL should be: https://{space_host_startup}.hf.space")
     else:
         print("ℹ️  SPACE_HOST environment variable not found (running locally?).")
 
-    if settings.SPACE_ID: # Use settings for SPACE_ID check
+    if settings.SPACE_ID:  # Use settings for SPACE_ID check
         print(f"✅ SPACE_ID found via settings: {settings.SPACE_ID}")
-        print(f"   Repo URL: https://huggingface.co/spaces/{settings.SPACE_ID}")
-        print(f"   Repo Tree URL: https://huggingface.co/spaces/{settings.SPACE_ID}/tree/main")
+        print(
+            f"   Repo URL: https://huggingface.co/spaces/{settings.SPACE_ID}")
+        print(
+            f"   Repo Tree URL: https://huggingface.co/spaces/{settings.SPACE_ID}/tree/main")
     else:
         print("ℹ️  SPACE_ID environment variable not found in settings (running locally?). Repo URL cannot be determined.")
 
     print("-"*(60 + len(" App Starting ")) + "\n")
 
     print("Launching Gradio Interface for Basic Agent Evaluation...")
-    if orchestrator_instance is None:
+    if controller is None:
         print("ERROR: Orchestrator failed to initialize. Gradio interface might not function correctly or at all.")
         # Optionally, do not launch, or launch with a clear error message in the UI itself.
         # For now, it will launch, but run_evaluation_wrapper will show an error.
 
-    demo.launch(debug=True, share=False) # Consider debug=False for production
+    demo.launch(debug=True, share=False)  # Consider debug=False for production

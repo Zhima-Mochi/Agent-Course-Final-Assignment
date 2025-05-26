@@ -17,29 +17,6 @@ from app.config import settings
 
 logger = logging.getLogger(__name__)
 
-class LangGraphAgentGraph:
-    """Direct implementation of an agent graph using LangGraph in application layer."""
-
-    def __init__(self, compiled_graph: Any):
-        if compiled_graph is None:
-            raise ValueError("Compiled graph cannot be None.")
-        self.compiled_graph = compiled_graph
-
-    def invoke(self, state: Dict[str, Any]) -> Dict[str, Any]:
-        """Invokes the compiled LangGraph with the given state."""
-        return self.compiled_graph.invoke(state)
-
-    def get_graph(self) -> Any:
-        """Return the compiled LangGraph graph."""
-        return self.compiled_graph
-
-    def process(self, state: Dict[str, Any]) -> Dict[str, Any]:
-        """Process a state and return the result."""
-        logger.debug(f"Processing state: {state.get('question', 'No question provided')[:50]}...")
-        result = self.invoke(state)
-        logger.debug(f"Process completed. Answer length: {len(result.get('answer', '')) if result.get('answer') else 'No answer'}")
-        return result
-
 
 @dataclass
 class LangGraphAgent:
@@ -48,19 +25,17 @@ class LangGraphAgent:
     name: str
     llm_service: OpenAILLMService
     tools: List[Callable]
-    prompt_strategy: PromptStrategy = None
     max_turns: int = 10
     enable_tracing: bool = False
 
     def __post_init__(self):
-        if self.prompt_strategy is None:
-            self.prompt_strategy = BasicPromptStrategy()
+        self.prompt_strategy = BasicPromptStrategy()
         
         if not self.tools:
             logger.warning(f"[{self.name}] Initialized with no tools.")
 
-    def initialize_graph(self) -> LangGraphAgentGraph:
-        """Initialize and return a LangGraph agent graph."""
+    def process(self, state: Dict[str, Any]) -> Dict[str, Any]:
+        """Process the current state and return an updated state"""
         try:
             llm = self.llm_service.get_llm()
             if llm is None:
@@ -80,7 +55,7 @@ class LangGraphAgent:
             if callbacks:
                 graph = graph.with_config({"callbacks": callbacks})
                 
-            return LangGraphAgentGraph(graph)
+            return graph.invoke(state)
         except Exception as e:
             logger.exception(f"[{self.name}] Failed to build LangGraph agent")
             raise
