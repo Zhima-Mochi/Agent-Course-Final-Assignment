@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 from typing import List, Dict, Any
-from app.domain.conversation import Message # Assuming Conversation model is defined
+from app.domain.message import Message # Assuming Conversation model is defined
 
 class PromptStrategy(ABC):
     """
