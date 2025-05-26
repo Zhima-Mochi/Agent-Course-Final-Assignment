@@ -19,32 +19,38 @@ The codebase is the capstone project for the "Build Your Own Agent" course.
 ---
 
 ## ✨ Key Features
+
 | Feature | What it does |
 |---------|--------------|
-| **Orchestrator + Agent graph** | `app/application/orchestrator.py`, `ai_agent.py` wire every tool into a LangGraph-style state machine. |
-| **Tool routing layer** | `infrastructure/tools_module.py` registers search, yt-dlp transcription, code-runner, plot renderer, etc. |
-| **Gradio UI with HF OAuth** | `app.py` exposes a one-click web UI; users must sign in with Hugging Face to run tasks. |
-| **Data-frame output** | Answers are returned both as chat text and as a Pandas `DataFrame` for easy CSV export. |
-| **Safe code execution** | Built-in sandbox. |
-| **Langfuse tracing** | Integrated LLM observability and tracing with Langfuse. |
+| **LangGraph Agent** | `app/application/langgraph_agent.py` implements a full agent with planning, thinking, and tool execution stages. |
+| **Task Processing Pipeline** | `app/application/task_processor.py` handles task execution with file processing capabilities. |
+| **Extensive Tool Library** | `app/infrastructure/tools_module.py` provides ready-to-use tools for search, transcription, code execution, and more. |
+| **Gradio UI with HF OAuth** | `app.py` delivers a web interface with Hugging Face authentication for user tracking. |
+| **Structured Answer Format** | Results are returned as both chat text and a pandas DataFrame for analysis. |
+| **Langfuse Tracing** | Built-in LLM observability with conditional Langfuse integration. |
 
 ---
 
 ## 📂 Project Layout
+
 ```
 app/
-├─ application/        # orchestrator, agent graph, ports
-│  ├─ ai_agent.py
-│  ├─ orchestrator.py
-│  └─ ports.py
-├─ domain/             # tasks, value objects, tools (trimmed)
-├─ infrastructure/
-│  └─ tools_module.py  # concrete tool adapters
-├─ config.py           # env & settings helper
-└─ ...
-app.py                  # Gradio entry-point
-requirements.txt        # pip users
-pyproject.toml          # poetry users
+├─ application/          # Core agent implementation
+│  ├─ langgraph_agent.py # LangGraph-based agent with planning, thinking, tools
+│  ├─ task_processor.py  # Task execution pipeline
+│  ├─ llm_service.py     # LLM service interface
+│  └─ ports.py           # Abstract interfaces
+├─ domain/               # Business domain objects
+│  ├─ value_objects.py   # Data models for state management
+│  └─ prompt_strategy.py # Prompt generation strategies
+├─ infrastructure/       # External service implementations
+│  ├─ tools_module.py    # Tool implementations
+│  └─ tool_provider.py   # Tool registration and management
+├─ task_controller.py    # Orchestrates evaluation workflow
+└─ config.py             # Environment and settings
+app.py                   # Gradio entry-point
+requirements.txt         # pip dependencies
+pyproject.toml           # poetry configuration
 ```
 
 ---
@@ -52,6 +58,7 @@ pyproject.toml          # poetry users
 ## 🛠️ Quick Start
 
 ### 1. Clone & Install
+
 ```bash
 git clone https://huggingface.co/spaces/Zhima-Mochi/Agent-Course-Final-Assignment
 cd Agent-Course-Final-Assignment
@@ -64,7 +71,7 @@ poetry shell
 pip install -r requirements.txt
 ```
 
-### 2. Set Environment Variables
+### 2. Configure Environment Variables
 
 | Variable                        | Description                         |
 | ------------------------------- | ----------------------------------- |
@@ -77,6 +84,7 @@ pip install -r requirements.txt
 | `LANGFUSE_PUBLIC_KEY`           | Langfuse public API key             |
 | `LANGFUSE_SECRET_KEY`           | Langfuse secret API key             |
 | `LANGFUSE_HOST`                 | Langfuse host URL                   |
+| `LOG_LEVEL`                     | Logging level (INFO, DEBUG, etc.)   |
 
 Create a `.env` file or export them in your shell.
 
@@ -90,33 +98,51 @@ Login with your HF account and hit **"Run all tasks"**.
 
 ---
 
-## 🏗️ Architecture in 60 sec
+## 🏗️ Architecture Overview
 
-1. **Ports & Adapters** — `ports.py` defines abstract service contracts.
-2. **Domain layer** — pure Python models (`Task`, `Tool`, `Answer`, `AgentState`).
-3. **Application layer** — Orchestrator builds the LangGraph, selects tools, maintains conversation state.
-4. **Infrastructure layer** — concrete adapters (web search, yt-dlp, matplotlib plotter, etc.).
-   New tools can be added in the following way:
+The application follows a clean architecture pattern with these key components:
 
-   ```python
-   @tool
-   def my_tool(input: str) -> str:
-       """Tool description goes here."""
-       # Implementation
-       return result
-   
-   # Register it with the provider
-   from app.infrastructure.tool_provider import LangchainToolAdapter
-   tool_provider.register_tool(LangchainToolAdapter(my_tool))
-   ```
+1. **LangGraph Agent** - A state machine that manages:
+   - Task planning: Breaking complex problems into steps
+   - Assistant thinking: Reasoning through solutions
+   - Tool execution: Using relevant tools when needed
+   - Answer finalization: Refining responses for clarity
+
+2. **Task Processing Pipeline** - Handles:
+   - Media file processing
+   - Agent invocation with proper context
+   - Result formatting
+
+3. **Tools System** - Extensible tool registry with:
+   - Web search capabilities
+   - Media processing
+   - Code execution
+   - Data visualization
+
+Adding new tools is straightforward:
+
+```python
+from app.infrastructure.tool_provider import ToolProvider
+
+@tool
+def my_custom_tool(input: str) -> str:
+    """Tool description goes here."""
+    # Implementation
+    return result
+
+# Register with the provider
+tool_provider = ToolProvider()
+tool_provider.register_tool(my_custom_tool)
+```
 
 ---
 
 ## 🚀 Deployment to Hugging Face
 
-1. Push the repo to a Space with **SDK = gradio**.
-2. Set the same env vars in the Space's **Secrets** panel.
-3. The Gradio UI boots automatically on every commit.
+1. Create a new Space on Hugging Face with **SDK = gradio**
+2. Push your code to the Space repository
+3. Add all required environment variables to the Space's **Secrets** panel
+4. The Gradio interface will deploy automatically
 
 ---
 
