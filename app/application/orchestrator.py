@@ -11,12 +11,11 @@ from app.domain.value_objects import Answer, AgentState
 from app.application.ports import (
     FileServicePort,
     ToolSelectorPort,
-    AgentGraphPort,
-    AgentInitializationPort,
     TaskGatewayPort,
 )
 from app.domain.tool import Tool as DomainTool
 from app.application.tool_service import ToolService
+from app.application.langgraph_agent import LangGraphAgentGraph
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +25,7 @@ class TaskProcessor:
     def __init__(self, 
                  file_service: FileServicePort,
                  tool_selector: ToolSelectorPort,
-                 agent_graph: AgentGraphPort,
+                 agent_graph: LangGraphAgentGraph,
                  available_tools_descriptions: Optional[List[DomainTool]] = None):
         self.file_service = file_service
         self.tool_selector = tool_selector
@@ -65,7 +64,7 @@ class TaskProcessor:
             state_dict = dict(state)
             logger.debug(f"[Task {task.task_id}] Invoking agent graph with initial state: {state_dict}")
             
-            state_out = self.agent_graph.invoke(state_dict)
+            state_out = self.agent_graph.process(state_dict)  # Use process instead of invoke
             
             if not state_out.get("messages"):
                 logger.error(f"[Task {task.task_id}] Agent output does not contain 'messages'. State: {state_out}")
@@ -113,11 +112,11 @@ class TaskProcessor:
         }
 
 class Orchestrator:
-    """Orchestrates the process using injected services (ports and adapters)."""
+    """Orchestrates the process using services (direct implementations and adapters)."""
     
     def __init__(self,
                  task_gateway: TaskGatewayPort,
-                 agent_initializer_port: AgentInitializationPort,
+                 agent_graph: LangGraphAgentGraph,  # Now using direct implementation
                  file_service: FileServicePort,
                  tool_selector: ToolSelectorPort,
                  tool_service: ToolService):
@@ -125,26 +124,12 @@ class Orchestrator:
         self.file_service = file_service
         self.tool_selector = tool_selector
         self.tool_service = tool_service
+        self.agent_graph = agent_graph  # Store agent graph directly
 
         # Use the tool service to get domain tools
         self.domain_tool_descriptions = self.tool_service.get_all_tools()
         
-        # Get Langchain tools via the agent initializer (which should be configured properly)
-        self.agent_initializer_port = agent_initializer_port
-        self.agent_graph_port = self._initialize_agent_once()
-
-    def _initialize_agent_once(self) -> AgentGraphPort:
-        """Initialize the AI agent graph using the configured AgentInitializationPort."""
-        logger.debug("Initializing agent graph via port...")
-        try:
-            # The agent_initializer_port should already have been configured with necessary tools
-            # (e.g. Langchain tools) and LLM service port during its own instantiation.
-            agent_graph_adapter = self.agent_initializer_port.initialize_agent_graph()
-            logger.info("Agent graph created successfully via port.")
-            return agent_graph_adapter
-        except Exception as e:
-            logger.exception("Failed to initialize agent graph via port.")
-            raise RuntimeError("Agent initialization failed") from e
+        logger.info("Orchestrator initialized with direct agent graph implementation")
     
     def _submit_results(self, profile: OAuthProfile, answers: List[Answer], space_id: Optional[str]) -> Tuple[str, Dict]:
         """Submit answers using TaskGatewayPort."""
@@ -182,7 +167,7 @@ class Orchestrator:
             logger.info(f"Starting task execution for user: {current_username}")
 
         try:
-            if not self.agent_graph_port:
+            if not self.agent_graph:
                 logger.error("Agent graph not available.")
                 return "Error: Agent graph not initialized.", None
 
@@ -192,7 +177,7 @@ class Orchestrator:
             processor = TaskProcessor(
                 file_service=self.file_service,
                 tool_selector=self.tool_selector,
-                agent_graph=self.agent_graph_port,
+                agent_graph=self.agent_graph,
                 available_tools_descriptions=self.domain_tool_descriptions
             )
             

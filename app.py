@@ -9,15 +9,17 @@ import pandas as pd
 from app.application.orchestrator import Orchestrator
 from app.config import settings
 
-# Infrastructure - Adapters
+# Application Layer - Direct implementations
+from app.application.llm_service import OpenAILLMService
+from app.application.langgraph_agent import LangGraphAgent, LangGraphAgentGraph
+
+# Infrastructure - Adapters that we're still using
 from app.infrastructure.api_task_gateway_adapter import APITaskGatewayAdapter
 from app.infrastructure.tool_selection_adapter import BasicToolSelectorAdapter
-from app.infrastructure.openai_llm_adapter import OpenAILLMAdapter
-from app.infrastructure.langgraph_agent_adapter import LangGraphAgentInitializerAdapter
 from app.infrastructure.tool_provider import LangchainToolProvider
 from app.application.tool_service import ToolService
 
-# Domain - for PromptStrategy if needed directly, or through adapter construction
+# Domain - for PromptStrategy if needed directly
 from app.domain.prompt_strategy import BasicPromptStrategy
 
 # Create logs directory
@@ -46,32 +48,36 @@ try:
     logger.info(f"SPACE_ID from settings: {settings.SPACE_ID}")
     logger.info(f"OpenAI Model from settings: {settings.OPENAI_MODEL_NAME}")
 
-    # 2. Instantiate Adapters, passing the settings object
+    # 2. Instantiate services and adapters
     task_gateway_adapter = APITaskGatewayAdapter(app_settings=settings)
     file_service_adapter = task_gateway_adapter 
     tool_selector_adapter = BasicToolSelectorAdapter()
     
-    llm_service_adapter = OpenAILLMAdapter(app_settings=settings)
-    # model_name, temperature etc. are now read from settings within OpenAILLMAdapter itself
+    # Direct implementation instead of adapter
+    llm_service = OpenAILLMService(app_settings=settings)
     
-    # Set up tool provider and service following clean architecture
+    # Set up tool provider and service
     tool_provider = LangchainToolProvider()
     tool_service = ToolService(tool_provider)
     
     prompt_strategy_instance = BasicPromptStrategy()
     
-    # Simplify tool initialization - pass the tools directly
-    agent_initializer_adapter = LangGraphAgentInitializerAdapter(
-        llm_service_port=llm_service_adapter,
-        lc_tools=tool_provider.get_tools(),
+    # Use direct LangGraph implementation
+    agent = LangGraphAgent(
+        name="StructuredMultimodalAgent",
+        llm_service=llm_service,
+        tools=tool_provider.get_tools(),
         prompt_strategy=prompt_strategy_instance,
         enable_tracing=settings.ENABLE_TRACING,
     )
+    
+    # Initialize the graph
+    agent_graph = agent.initialize_graph()
 
-    # 3. Instantiate Orchestrator with the tool service
+    # 3. Instantiate Orchestrator with all the components
     orchestrator_instance = Orchestrator(
         task_gateway=task_gateway_adapter,
-        agent_initializer_port=agent_initializer_adapter,
+        agent_graph=agent_graph,  # Pass the graph directly
         file_service=file_service_adapter,
         tool_selector=tool_selector_adapter,
         tool_service=tool_service,

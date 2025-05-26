@@ -5,7 +5,6 @@ from app.domain.task import QuestionTask  # Assuming QuestionTask is defined her
 from app.domain.value_objects import Answer  # Assuming Answer is defined here
 from app.domain.conversation import Message  # For LLM interaction
 from app.domain.tool import Tool  # For tool interactions
-from typing import Protocol, Dict, Any
 
 class ToolProviderPort(ABC):
     """Interface for tool provider services"""
@@ -23,22 +22,6 @@ class ToolProviderPort(ABC):
     @abstractmethod
     def register_tool(self, tool: Callable) -> None:
         """Register a new tool"""
-        pass
-
-
-class LLMServicePort(Protocol):
-    @abstractmethod
-    def invoke_llm(
-        self,
-        messages: List[Message],
-        tool_choice: Optional[str] = None,
-        tools: Optional[List[Tool]] = None,
-    ) -> Any:
-        pass
-
-    @abstractmethod
-    def get_llm(self) -> Any:
-        """Returns the underlying concrete LLM instance (e.g., Langchain ChatModel)."""
         pass
 
 
@@ -80,20 +63,4 @@ class TaskGatewayPort(ABC):
     def submit_answers(
         self, user_id: str, answers: List[Dict[str, Any]], space_id: Optional[str]
     ) -> Dict[str, Any]:
-        pass
-
-
-class AgentGraphPort(ABC):
-    @abstractmethod
-    def invoke(self, state: Dict[str, Any]) -> Dict[str, Any]:
-        pass
-
-    @abstractmethod
-    def get_graph(self) -> Any:  # Returns the compiled LangGraph agent/graph
-        pass
-
-
-class AgentInitializationPort(ABC):
-    @abstractmethod
-    def initialize_agent_graph(self) -> AgentGraphPort:
         pass

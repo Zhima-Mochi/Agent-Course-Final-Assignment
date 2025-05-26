@@ -1,5 +1,4 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from pydantic import Field # Import Field for env aliases if needed
 from typing import Optional, Literal
 import os
 
@@ -17,10 +16,6 @@ class AppSettings(BaseSettings):
     # Centralized OpenAI client configurations
     OPENAI_MODEL_NAME: str = "gpt-4o-mini"
     OPENAI_TEMPERATURE: float = 0.2
-    # For OPENAI_TIMEOUT, if the .env variable is OPENAI_TIMEOUT, 
-    # pydantic-settings will map it to a field named openai_timeout (case-insensitive matching for env vars).
-    # If the field name in the model is OPENAI_TIMEOUT, it will also map.
-    # Using Field(..., alias='OPENAI_TIMEOUT_ENV_VAR') would be if env var name differs significantly.
     OPENAI_TIMEOUT: int = 30 # Corresponds to env var OPENAI_TIMEOUT
     OPENAI_MAX_TOKENS: int = 2000
     
