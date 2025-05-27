@@ -7,7 +7,7 @@ import requests
 import inspect
 import pandas as pd
 from app.application.task_processor import TaskProcessor
-from app.task_controller import TaskController
+from app.infrastructure.task_controller import TaskController
 from app.config import settings
 
 # Application Layer - Direct implementations

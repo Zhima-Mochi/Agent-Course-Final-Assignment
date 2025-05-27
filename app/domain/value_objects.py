@@ -37,3 +37,10 @@ class QuestionTask:
     task_id: str
     question: str
     file_name: Optional[str] = None
+
+class Message:
+    # Basic message structure, can be expanded
+    def __init__(self, content: str, sender: str, metadata: Dict[str, Any] = None):
+        self.content = content
+        self.sender = sender
+        self.metadata = metadata or {}
